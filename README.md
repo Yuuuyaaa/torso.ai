@@ -89,6 +89,20 @@ npm run dev
 - 本番ではJSON DBをSupabase/Postgresへ置換推奨
 - 本番ではバックエンド認証を必ず導入
 
+## Netlifyメモ
+
+- `netlify.toml` は `npm run build` / `dist` を前提に設定済み
+- フロントだけ先にNetlifyへ出す場合、`VITE_BACKEND_BASE_URL` を未設定のままにすると公開サイトでは自動でモックモードへ切り替わる
+- その状態でも空欄ログインで `dev@local.test` に入ってUI確認できる
+- 実際のログイン / 生成 / クレジット / 資産保存を使うには、`server/mvpServer.js` を別ホストへデプロイして `VITE_BACKEND_BASE_URL=https://...` を Netlify に設定する
+- バックエンド側で必要な主な環境変数:
+  - `FASHN_API_KEY`
+  - `FASHN_BASE_URL`（必要なら）
+  - `SUPABASE_URL`
+  - `SUPABASE_SERVICE_ROLE_KEY`
+  - `SUPABASE_STORAGE_BUCKET`
+  - `BACKEND_PUBLIC_BASE_URL`
+
 ## Supabaseマイグレーション
 
 - マイグレーションSQLは `supabase/migrations` に時系列で保存

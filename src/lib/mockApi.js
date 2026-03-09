@@ -3,8 +3,11 @@ const SESSION_KEY = "fcursor-fashion-session-v1";
 const MODE_KEY = "fcursor-fashion-mode-v1";
 const DEMO_KEY = "fcursor-fashion-demo-v1";
 const ASSET_STORAGE_PREFIX = "torso-asset-library-v1";
-const USE_BACKEND_API = import.meta.env.VITE_USE_BACKEND_API !== "false";
-const BACKEND_BASE_URL = (import.meta.env.VITE_BACKEND_BASE_URL || "http://localhost:8787").replace(/\/$/, "");
+const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
+const EXPLICIT_BACKEND_BASE_URL = String(import.meta.env.VITE_BACKEND_BASE_URL || "").trim();
+const IS_LOCAL_BROWSER = typeof window === "undefined" || LOCAL_HOSTNAMES.has(window.location.hostname);
+const USE_BACKEND_API = import.meta.env.VITE_USE_BACKEND_API !== "false" && (IS_LOCAL_BROWSER || Boolean(EXPLICIT_BACKEND_BASE_URL));
+const BACKEND_BASE_URL = (EXPLICIT_BACKEND_BASE_URL || "http://localhost:8787").replace(/\/$/, "");
 
 const PLAN_DEFS = {
   starter: { label: "Starter", monthlyCredits: 30 },
@@ -193,6 +196,23 @@ function persistMutator(mutator) {
   return result;
 }
 
+function ensureLocalDevUser(db) {
+  const existing = db.users.find((u) => u.email === "dev@local.test");
+  if (existing) return touchMonthlyCredits(existing);
+  const user = touchMonthlyCredits({
+    id: "usr_devlocal",
+    email: "dev@local.test",
+    name: "Developer",
+    password: "",
+    plan: "growth",
+    credits: PLAN_DEFS.growth.monthlyCredits,
+    creditMonth: currentMonthKey(),
+    createdAt: nowIso(),
+  });
+  db.users.push(user);
+  return user;
+}
+
 function estimateUnits(file) {
   const isZip = (file.name || "").toLowerCase().endsWith(".zip");
   return isZip ? 10 : 1;
@@ -345,7 +365,8 @@ export async function login({ email, password }) {
   }
 
   return persistMutator((db) => {
-    const existing = db.users.find((u) => u.email === normalizedEmail);
+    const existing = db.users.find((u) => u.email === normalizedEmail)
+      || (normalizedEmail === "dev@local.test" ? ensureLocalDevUser(db) : null);
     if (!existing) throw new Error("アカウントが存在しません。新規登録してください。");
     if (existing.password && existing.password !== normalizedPassword) {
       throw new Error("メールアドレスまたはパスワードが正しくありません。");
