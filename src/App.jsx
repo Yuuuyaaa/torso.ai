@@ -4046,6 +4046,15 @@ function UploadPage({ user, jobs, onDataRefresh, onJobCreated, studioAssets = []
 // PAGE: HISTORY
 // ─────────────────────────────────────────────
 function HistoryPage({ user, jobs, onRefresh, isMobile = false }) {
+  const visibleJobs = useMemo(
+    () => (jobs || []).filter((job) => {
+      const styleConfig = job?.styleConfig && typeof job.styleConfig === "object" ? job.styleConfig : {};
+      const isModelGenerateJob = String(job?.style || "") === "model"
+        && (String(job?.modelRunStrategy || "") === "model-create" || String(styleConfig?.generator || "") === "model-create");
+      return !isModelGenerateJob;
+    }),
+    [jobs],
+  );
   const [selected, setSelected] = useState(null);
   const [viewer, setViewer] = useState({ open: false, items: [], index: 0, title: "" });
   const viewerCanvasRef = useRef(null);
@@ -4065,7 +4074,7 @@ function HistoryPage({ user, jobs, onRefresh, isMobile = false }) {
   const [refreshing, setRefreshing] = useState(false);
   const [viewerViewportSize, setViewerViewportSize] = useState({ width: 0, height: 0 });
   const [viewerImageNaturalSize, setViewerImageNaturalSize] = useState({ width: 0, height: 0 });
-  const generatedItems = jobs.flatMap((job) => (
+  const generatedItems = visibleJobs.flatMap((job) => (
     (job.items || [])
       .map((item) => ({
         id: item.id,
@@ -4701,7 +4710,7 @@ function HistoryPage({ user, jobs, onRefresh, isMobile = false }) {
             <span key={h} style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: C.textSub, fontFamily: SANS }}>{h}</span>
           ))}
         </div>
-        {jobs.map((row) => {
+        {visibleJobs.map((row) => {
           const isOpen = selected === row.id;
           const rowDoneItems = (row.items || []).filter((item) => item.status === "done");
           return (
@@ -4779,7 +4788,7 @@ function HistoryPage({ user, jobs, onRefresh, isMobile = false }) {
             </div>
           );
         })}
-        {jobs.length === 0 && (
+        {visibleJobs.length === 0 && (
           <div style={{ padding: 24, color: C.textSub, textAlign: "center", fontSize: 13 }}>
             まだ生成ジョブがありません。
           </div>
@@ -7251,7 +7260,7 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
   );
 }
 
-function ModelsLibraryPage({ user, assets, setAssets, onDataRefresh, isMobile = false }) {
+function ModelsLibraryPage({ user, assets, setAssets, isMobile = false }) {
   const modelQualityHelpRef = useRef(null);
   const numImagesHelpRef = useRef(null);
   const viewerCanvasRef = useRef(null);
@@ -7476,9 +7485,6 @@ function ModelsLibraryPage({ user, assets, setAssets, onDataRefresh, isMobile = 
           })
           .filter(Boolean);
       });
-      if (typeof onDataRefresh === "function") {
-        await onDataRefresh();
-      }
     } catch (e) {
       setAssets((prev) => prev.filter((asset) => !pendingIds.includes(asset.id)));
       if (isMountedRef.current) {
@@ -7499,7 +7505,7 @@ function ModelsLibraryPage({ user, assets, setAssets, onDataRefresh, isMobile = 
         setRunning(false);
       }
     }
-  }, [modelGenResolution, modelTargetGender, numImages, onDataRefresh, prompt, running, setAssets, user?.id, user?.isDemo]);
+  }, [modelGenResolution, modelTargetGender, numImages, prompt, running, setAssets, user?.id, user?.isDemo]);
 
   const stopGenerate = useCallback(() => {
     modelGenerateAbortRef.current?.abort();
@@ -9323,7 +9329,6 @@ export default function App() {
         user={user}
         assets={modelAssets}
         setAssets={setModelAssets}
-        onDataRefresh={refreshData}
         isMobile={isMobile}
       />
     ),
