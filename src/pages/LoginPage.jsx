@@ -10,18 +10,22 @@ export default function LoginPage({ onLogin, onSignup, defaultTab = "login" }) {
   const [showPass, setShowPass] = useState(false);
   const [tab, setTab] = useState(defaultTab);
   const [error, setError] = useState("");
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
     setTab(defaultTab);
   }, [defaultTab]);
 
   const handleAuth = async () => {
+    if (isSubmitting) return;
     const effectiveEmail = email.trim() || "dev@local.test";
     const effectivePass = String(pass || "");
+    setIsSubmitting(true);
     try {
       if (tab === "signup") {
         if (effectivePass.length < 8) {
           setError("パスワードは8桁以上で入力してください。");
+          setIsSubmitting(false);
           return;
         }
         await onSignup({ email: effectiveEmail, password: effectivePass });
@@ -31,6 +35,8 @@ export default function LoginPage({ onLogin, onSignup, defaultTab = "login" }) {
       setError("");
     } catch (e) {
       setError(e.message);
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -160,8 +166,24 @@ export default function LoginPage({ onLogin, onSignup, defaultTab = "login" }) {
             )}
 
             <div style={{ marginTop: 8 }}>
-              <Btn variant="primary" full size="lg" onClick={handleAuth}>
-                {tab === "login" ? "ログイン" : "アカウントを作成"}
+              <Btn variant="primary" full size="lg" onClick={handleAuth} disabled={isSubmitting}>
+                <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 10 }}>
+                  {isSubmitting ? (
+                    <span
+                      aria-hidden="true"
+                      style={{
+                        width: 14,
+                        height: 14,
+                        borderRadius: "50%",
+                        border: "1.5px solid currentColor",
+                        borderTopColor: "transparent",
+                        display: "inline-block",
+                        animation: "spin 0.8s linear infinite",
+                      }}
+                    />
+                  ) : null}
+                  <span>{isSubmitting ? (tab === "login" ? "ログイン中..." : "作成中...") : (tab === "login" ? "ログイン" : "アカウントを作成")}</span>
+                </span>
               </Btn>
               {tab === "login" && (
                 <p style={{ marginTop: 8, fontSize: 11, color: C.textSub }}>
@@ -176,20 +198,22 @@ export default function LoginPage({ onLogin, onSignup, defaultTab = "login" }) {
               onClick={() => {
                 void handleAuth();
               }}
+              disabled={isSubmitting}
               style={{
                 width: "100%",
                 padding: "12px",
                 border: `1px solid ${C.border}`,
                 borderRadius: 1,
                 background: C.surface,
-                cursor: "pointer",
+                cursor: isSubmitting ? "not-allowed" : "pointer",
                 fontSize: 13,
                 fontFamily: SANS,
-                color: C.text,
+                color: isSubmitting ? C.textSub : C.text,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
                 gap: 10,
+                opacity: isSubmitting ? 0.7 : 1,
               }}
             >
               <span style={{ fontSize: 16 }}>G</span> Google で続ける
