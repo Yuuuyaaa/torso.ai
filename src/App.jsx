@@ -626,8 +626,9 @@ const PRODUCT_CATEGORY_OPTIONS = [
 const LOCAL_HOSTNAMES = new Set(["localhost", "127.0.0.1"]);
 const EXPLICIT_BACKEND_PREVIEW_BASE_URL = String(import.meta.env.VITE_BACKEND_BASE_URL || "").trim();
 const IS_LOCAL_BROWSER = typeof window === "undefined" || LOCAL_HOSTNAMES.has(window.location.hostname);
-const USE_BACKEND_PREVIEW = import.meta.env.VITE_USE_BACKEND_API !== "false" && (IS_LOCAL_BROWSER || Boolean(EXPLICIT_BACKEND_PREVIEW_BASE_URL));
-const BACKEND_PREVIEW_BASE_URL = (EXPLICIT_BACKEND_PREVIEW_BASE_URL || "http://localhost:8787").replace(/\/$/, "");
+const DEFAULT_BACKEND_PREVIEW_BASE_URL = IS_LOCAL_BROWSER ? "http://localhost:8787" : "";
+const USE_BACKEND_PREVIEW = import.meta.env.VITE_USE_BACKEND_API !== "false";
+const BACKEND_PREVIEW_BASE_URL = (EXPLICIT_BACKEND_PREVIEW_BASE_URL || DEFAULT_BACKEND_PREVIEW_BASE_URL).replace(/\/$/, "");
 const PREVIEW_CONVERT_MAX_RETRY = 2;
 const PREVIEW_CONVERT_CONCURRENCY = 2;
 const ASSET_STORAGE_PREFIX = "torso-asset-library-v1";

@@ -92,16 +92,20 @@ npm run dev
 ## Netlifyメモ
 
 - `netlify.toml` は `npm run build` / `dist` を前提に設定済み
-- フロントだけ先にNetlifyへ出す場合、`VITE_BACKEND_BASE_URL` を未設定のままにすると公開サイトでは自動でモックモードへ切り替わる
-- その状態でも空欄ログインで `dev@local.test` に入ってUI確認できる
-- 実際のログイン / 生成 / クレジット / 資産保存を使うには、`server/mvpServer.js` を別ホストへデプロイして `VITE_BACKEND_BASE_URL=https://...` を Netlify に設定する
-- バックエンド側で必要な主な環境変数:
+- `netlify/functions/api.js` に serverless 互換APIの土台を追加済み
+- デプロイ先では `VITE_BACKEND_BASE_URL` を未設定にすると同一オリジン `/api/*` を呼ぶ
+- ローカル開発だけ `http://localhost:8787` を既定値として使う
+- Netlify / Functions 側で必要な主な環境変数:
   - `FASHN_API_KEY`
   - `FASHN_BASE_URL`（必要なら）
   - `SUPABASE_URL`
   - `SUPABASE_SERVICE_ROLE_KEY`
   - `SUPABASE_STORAGE_BUCKET`
   - `BACKEND_PUBLIC_BASE_URL`
+- Supabase には最新 migration まで適用すること
+  - `202603100001_add_password_hash_to_app_users.sql` を含む
+- 現時点の Functions 化は auth / users / jobs read / credit history / asset library / storage upload まで
+- `server/mvpServer.js` の FASHN生成処理（jobs create / retry / download / edit / models generate）は次段階で Functions へ分割移植する
 
 ## Supabaseマイグレーション
 
