@@ -7251,7 +7251,7 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
   );
 }
 
-function ModelsLibraryPage({ user, assets, setAssets, isMobile = false }) {
+function ModelsLibraryPage({ user, assets, setAssets, onDataRefresh, isMobile = false }) {
   const modelQualityHelpRef = useRef(null);
   const numImagesHelpRef = useRef(null);
   const viewerCanvasRef = useRef(null);
@@ -7476,6 +7476,9 @@ function ModelsLibraryPage({ user, assets, setAssets, isMobile = false }) {
           })
           .filter(Boolean);
       });
+      if (typeof onDataRefresh === "function") {
+        await onDataRefresh();
+      }
     } catch (e) {
       setAssets((prev) => prev.filter((asset) => !pendingIds.includes(asset.id)));
       if (isMountedRef.current) {
@@ -7496,7 +7499,7 @@ function ModelsLibraryPage({ user, assets, setAssets, isMobile = false }) {
         setRunning(false);
       }
     }
-  }, [modelGenResolution, modelTargetGender, numImages, prompt, running, setAssets, user?.id, user?.isDemo]);
+  }, [modelGenResolution, modelTargetGender, numImages, onDataRefresh, prompt, running, setAssets, user?.id, user?.isDemo]);
 
   const stopGenerate = useCallback(() => {
     modelGenerateAbortRef.current?.abort();
@@ -9320,6 +9323,7 @@ export default function App() {
         user={user}
         assets={modelAssets}
         setAssets={setModelAssets}
+        onDataRefresh={refreshData}
         isMobile={isMobile}
       />
     ),

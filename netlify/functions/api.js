@@ -489,6 +489,28 @@ function buildPromptFromConfig(styleConfig) {
   ].filter(Boolean).join(" ");
 }
 
+function normalizeTargetGender(value) {
+  return String(value || "").toLowerCase() === "mens" ? "mens" : "womens";
+}
+
+function withDefaultModelStylePrompt(prompt, targetGender = "womens") {
+  const base = String(prompt || "").trim();
+  const outfitPrompt = targetGender === "mens"
+    ? [
+      "Wearing a plain white fitted t-shirt, dark gray denim shorts ending above the knees, barefoot.",
+      "Standing straight, centered, facing forward, arms relaxed, feet parallel.",
+      "Full body fully visible from head to toes.",
+      "Seamless light gray cyclorama background.",
+    ].join(" ")
+    : [
+      "Wearing a plain white fitted tank top with thin straps, high-waisted dark gray denim shorts, barefoot.",
+      "Standing straight, centered, facing forward, arms relaxed, feet parallel.",
+      "Full body fully visible from head to toes.",
+      "Seamless light gray cyclorama background.",
+    ].join(" ");
+  return [base, outfitPrompt].filter(Boolean).join(" ");
+}
+
 async function fashnRequest(path, options = {}) {
   if (!FASHN_API_KEY) {
     throw new Error("FASHN_API_KEY is missing");
@@ -1159,6 +1181,218 @@ export async function handler(event) {
 
       const finalJob = await getJobById(jobId);
       return json(200, { job: finalJob });
+    }
+
+    if (method === "POST" && path === "/models/generate") {
+      const body = parseBody(event);
+      const userId = String(body.userId || "").trim();
+      const prompt = String(body.prompt || "").trim();
+      const targetGender = normalizeTargetGender(body.targetGender);
+      const effectivePrompt = withDefaultModelStylePrompt(prompt, targetGender);
+      const numImages = Math.max(1, Math.min(4, Number(body.numImages || 1)));
+      const resolution = String(body.resolution || "1k").toLowerCase() === "4k" ? "4k" : "1k";
+      const faceReference = String(body.faceReference || "").trim();
+
+      if (!userId) return json(400, { error: "userId is required" });
+      if (!prompt) return json(400, { error: "prompt is required" });
+
+      const user = await getUserById(userId);
+      if (!user) return json(404, { error: "user not found" });
+
+      const modelCreditRate = resolution === "4k" ? 2 : 1;
+      const reservedCredits = numImages * modelCreditRate;
+      const currentCredits = Number(user.credits || 0);
+      if (currentCredits < reservedCredits) {
+        return json(400, { error: `クレジット不足です。必要 ${reservedCredits}cr / 残り ${currentCredits}cr` });
+      }
+
+      const jobId = id("job");
+      const createdAt = nowIso();
+      const nextCredits = currentCredits - reservedCredits;
+      await updateUserCredits(userId, nextCredits);
+      await appendCreditEvent(userId, "model_generate_reserved", -reservedCredits, {
+        jobId,
+        numImages,
+        resolution,
+        targetGender,
+      }, nextCredits);
+
+      await supabaseRequest("/app_jobs", {
+        method: "POST",
+        body: {
+          job_id: jobId,
+          user_id: userId,
+          style: "model",
+          status: "processing",
+          output_preset: "fourFive",
+          style_config: {
+            mode: "model",
+            aspectRatio: "4:5",
+            targetGender,
+            framing: "full",
+            orientation: "front",
+            quality: resolution === "4k" ? "high" : "standard",
+            customPrompt: prompt,
+            generator: "model-create",
+          },
+          background_asset_id: null,
+          model_asset_id: null,
+          model_run_strategy: "model-create",
+          credit_rate: modelCreditRate,
+          reserved_credits: reservedCredits,
+          credit_used: 0,
+          image_count: numImages,
+          processed_count: 0,
+          success_count: 0,
+          error_count: 0,
+          retry_attempt: 0,
+          created_at: createdAt,
+        },
+      });
+
+      const pendingItems = Array.from({ length: numImages }).map((_, index) => ({
+        item_id: id("itm"),
+        job_id: jobId,
+        user_id: userId,
+        name: `model-generate-${index + 1}.png`,
+        relative_path: `model-generate-${index + 1}.png`,
+        sku_guess: "model-generate",
+        mime: "image/png",
+        status: "processing",
+        error: null,
+        error_hint: null,
+        input_url: faceReference,
+        output_url: "",
+        output_name: null,
+        output_sequence: index + 1,
+        credit_used: 0,
+        created_at: createdAt,
+      }));
+      await supabaseRequest("/app_job_items", {
+        method: "POST",
+        body: pendingItems,
+      });
+      await appendJobEvent(userId, jobId, "job_created", {
+        imageCount: numImages,
+        style: "model",
+        generator: "model-create",
+        resolution,
+        targetGender,
+      });
+
+      const createdAtDate = new Date(createdAt);
+      const createdDateLabel = createdAtDate.toLocaleDateString("ja-JP");
+      const createdTimeLabel = createdAtDate
+        .toLocaleTimeString("ja-JP", { hour12: false })
+        .replace(/:/g, "");
+      const models = [];
+      let failedCount = 0;
+      const usedSeeds = new Set();
+      const nextUniqueSeed = () => {
+        let seed = Math.floor(Math.random() * 0x100000000);
+        while (usedSeeds.has(seed)) {
+          seed = Math.floor(Math.random() * 0x100000000);
+        }
+        usedSeeds.add(seed);
+        return seed;
+      };
+
+      for (let i = 0; i < pendingItems.length; i += 1) {
+        const item = pendingItems[i];
+        try {
+          const seed = nextUniqueSeed();
+          const payload = {
+            model_name: "model-create",
+            inputs: {
+              prompt: effectivePrompt,
+              num_images: 1,
+              seed,
+              aspect_ratio: "4:5",
+              resolution,
+              output_format: "png",
+            },
+          };
+          if (faceReference.startsWith("data:image/") || /^https?:\/\//.test(faceReference)) {
+            payload.inputs.face_reference = toAbsoluteUrl(event, faceReference);
+          }
+          const runRes = await fashnRequest("/run", {
+            method: "POST",
+            body: JSON.stringify(payload),
+            timeoutMs: 45000,
+          });
+          await appendJobEvent(userId, jobId, "fashn_run_started", {
+            itemId: item.item_id,
+            predictionId: runRes.id,
+            generator: "model-create",
+          });
+          const statusRes = await waitForPrediction(runRes.id, 90, 2000);
+          if (!["completed", "complete", "succeeded", "success"].includes(String(statusRes?.status || "").toLowerCase())) {
+            throw new Error(statusRes?.error || "model generation failed");
+          }
+          const outputUrlSource = extractOutputUrls(statusRes)[0];
+          if (!outputUrlSource) throw new Error("model output is empty");
+          const modelId = id("mdl");
+          const storagePath = `${userId}/models/${modelId}.png`;
+          const outputUrl = await persistRemoteImageToStorage(outputUrlSource, storagePath);
+          const modelName = `モデル ${createdDateLabel}-${createdTimeLabel}-${i + 1}-${modelId.slice(-4)}`;
+          models.push({
+            id: modelId,
+            name: modelName,
+            outputUrl,
+            sourceUrl: outputUrlSource,
+            prompt: effectivePrompt,
+            seed,
+            favorite: false,
+            createdAt,
+          });
+          await updateJobItemRow(item.item_id, {
+            status: "done",
+            output_url: outputUrl,
+            output_name: modelName,
+            credit_used: modelCreditRate,
+            error: null,
+            error_hint: null,
+          });
+          await appendJobEvent(userId, jobId, "item_done", { itemId: item.item_id, modelId });
+        } catch (error) {
+          failedCount += 1;
+          const message = error instanceof Error ? error.message : String(error || "model generation failed");
+          await updateJobItemRow(item.item_id, {
+            status: "error",
+            error: message,
+            error_hint: itemErrorHint(message),
+            credit_used: 0,
+          });
+          await appendJobEvent(userId, jobId, "item_error", { itemId: item.item_id, error: message });
+        }
+      }
+
+      if (failedCount > 0) {
+        const refundCredits = failedCount * modelCreditRate;
+        const refundedUser = await updateUserCredits(userId, nextCredits + refundCredits);
+        await appendCreditEvent(userId, "model_generate_refund", refundCredits, {
+          jobId,
+          numImages,
+          failedCount,
+          resolution,
+          targetGender,
+        }, Number(refundedUser?.credits || nextCredits + refundCredits));
+      }
+
+      await updateJobRow(jobId, {
+        status: models.length > 0 ? "done" : "error",
+        processed_count: pendingItems.length,
+        success_count: models.length,
+        error_count: failedCount,
+        credit_used: models.length * modelCreditRate,
+      });
+
+      if (models.length === 0) {
+        return json(502, { error: "model generation failed" });
+      }
+
+      const job = await getJobById(jobId);
+      return json(200, { models, failedCount, job });
     }
 
     if (method === "GET" && path.match(/^\/jobs\/[^/]+$/)) {
