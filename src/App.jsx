@@ -42,6 +42,8 @@ const PLAN_MAX_CREDITS = {
 };
 const MOBILE_BREAKPOINT = 900;
 const MOBILE_PRIMARY_NAV_IDS = ["products", "upload", "history", "edit", "models"];
+const DASHBOARD_CACHE_PREFIX = "torso-dashboard-cache-v1";
+const DASHBOARD_CACHE_TTL_MS = 3 * 60 * 1000;
 
 // ─────────────────────────────────────────────
 // GLOBAL STYLES
@@ -651,6 +653,40 @@ function preloadImage(src) {
   const img = new Image();
   img.decoding = "async";
   img.src = src;
+}
+
+function readDashboardCache(userId) {
+  if (!userId || typeof sessionStorage === "undefined") return null;
+  try {
+    const raw = sessionStorage.getItem(`${DASHBOARD_CACHE_PREFIX}:${userId}`);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeDashboardCache(userId, payload) {
+  if (!userId || typeof sessionStorage === "undefined") return;
+  try {
+    sessionStorage.setItem(`${DASHBOARD_CACHE_PREFIX}:${userId}`, JSON.stringify({
+      savedAt: Date.now(),
+      ...payload,
+    }));
+  } catch {
+    // Ignore cache write failures.
+  }
+}
+
+function clearDashboardCache(userId) {
+  if (!userId || typeof sessionStorage === "undefined") return;
+  try {
+    sessionStorage.removeItem(`${DASHBOARD_CACHE_PREFIX}:${userId}`);
+  } catch {
+    // Ignore cache cleanup failures.
+  }
 }
 
 function extractDroppedFiles(dataTransfer) {
@@ -3709,7 +3745,7 @@ function UploadPage({ user, jobs, onDataRefresh, onJobCreated, studioAssets = []
                           ×
                         </button>
                         <div style={{ aspectRatio: "1 / 1.08", background: C.borderLight }}>
-                          <img src={asset.outputUrl || asset.dataUrl || ""} alt={asset.name} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                          <img src={asset.outputUrl || asset.dataUrl || ""} alt={asset.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                         </div>
                       </div>
                     ))}
@@ -3796,7 +3832,7 @@ function UploadPage({ user, jobs, onDataRefresh, onJobCreated, studioAssets = []
                       }}
                     >
                       <div style={{ aspectRatio: "1 / 1.08", background: C.borderLight, position: "relative" }}>
-                        <img src={asset.outputUrl || asset.dataUrl || ""} alt={asset.name} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                        <img src={asset.outputUrl || asset.dataUrl || ""} alt={asset.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                         <div style={{
                           position: "absolute",
                           top: 8,
@@ -3891,7 +3927,7 @@ function UploadPage({ user, jobs, onDataRefresh, onJobCreated, studioAssets = []
                       }}
                     >
                       <div style={{ aspectRatio: "3/4", background: C.borderLight }}>
-                        <img src={asset.outputUrl || asset.dataUrl || ""} alt={asset.name} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                        <img src={asset.outputUrl || asset.dataUrl || ""} alt={asset.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                       </div>
                     </button>
                   ))}
@@ -3969,7 +4005,7 @@ function UploadPage({ user, jobs, onDataRefresh, onJobCreated, studioAssets = []
                           ×
                         </button>
                         <div style={{ aspectRatio: "3/4", background: C.borderLight }}>
-                          <img src={asset.outputUrl || asset.dataUrl || ""} alt={asset.name} style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+                          <img src={asset.outputUrl || asset.dataUrl || ""} alt={asset.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
                         </div>
                       </div>
                     );
@@ -4405,7 +4441,7 @@ function HistoryPage({ user, jobs, onRefresh, isMobile = false }) {
         {item.outputUrl ? (
           <div style={{ position: "relative", width: "100%", height: "100%" }}>
             <div style={{ display: "block", width: "100%", height: "100%" }}>
-              <img src={item.outputUrl} alt={item.outputName || item.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              <img src={item.outputUrl} alt={item.outputName || item.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
             </div>
             {selectionMode && (
               <button
@@ -4715,7 +4751,7 @@ function HistoryPage({ user, jobs, onRefresh, isMobile = false }) {
                                 onClick={() => openViewer(rowDoneItems, itemIndex, `Job ${row.id}`)}
                                 style={{ display: "block", width: "100%", height: "100%", padding: 0, margin: 0, border: "none", background: "transparent", cursor: "default" }}
                               >
-                                <img src={item.outputUrl} alt={item.outputName || item.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                                <img src={item.outputUrl} alt={item.outputName || item.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                               </button>
                             ) : (
                               <span style={{ fontSize: 10, color: C.textSub }}>画像なし</span>
@@ -5337,7 +5373,7 @@ function EditPage({ jobs, user, onDataRefresh, onJobCreated, studioAssets = [], 
         {backgroundReferenceImage ? (
           <div style={{ display: "grid", gridTemplateColumns: "72px 1fr auto", gap: 10, alignItems: "center" }}>
             <div style={{ width: 72, aspectRatio: "1 / 1", borderRadius: 12, overflow: "hidden", background: C.bg, border: `1px solid ${C.borderLight}` }}>
-              <img src={backgroundReferenceImage.imageUrl} alt={backgroundReferenceImage.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+              <img src={backgroundReferenceImage.imageUrl} alt={backgroundReferenceImage.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
             </div>
             <div style={{ minWidth: 0 }}>
               <p style={{ fontSize: 11, color: C.text, fontWeight: 600, marginBottom: 4 }}>参照画像を設定中</p>
@@ -5772,7 +5808,7 @@ function EditPage({ jobs, user, onDataRefresh, onJobCreated, studioAssets = [], 
                           }}
                         >
                           <div style={{ aspectRatio: "1 / 1", background: C.bg }}>
-                            <img src={item.imageUrl} alt={item.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                            <img src={item.imageUrl} alt={item.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                           </div>
                           <p style={{ fontSize: 9, color: C.textSub, padding: "4px 6px", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                             {item.name}
@@ -5890,7 +5926,7 @@ function EditPage({ jobs, user, onDataRefresh, onJobCreated, studioAssets = [], 
                       style={{ border: `1px solid ${C.borderLight}`, background: C.surface, padding: 0, textAlign: "left", cursor: "pointer" }}
                     >
                       <div style={{ aspectRatio: "3/4", background: C.bg }}>
-                        <img src={item.imageUrl} alt={item.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                        <img src={item.imageUrl} alt={item.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                       </div>
                       <div style={{ padding: "7px 8px" }}>
                         <p style={{ fontSize: 10, color: C.textSub, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{item.name}</p>
@@ -6897,7 +6933,7 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
                 }}
                 style={{ aspectRatio: "3/4", background: C.bg, border: "none", padding: 0, width: "100%", display: "block", cursor: "pointer", position: "relative" }}
               >
-                <img src={asset.outputUrl || asset.dataUrl || ""} alt={asset.name} style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                <img src={asset.outputUrl || asset.dataUrl || ""} alt={asset.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                 {selectionMode && (
                   <span
                     style={{
@@ -8921,12 +8957,26 @@ export default function App() {
     setRoute(path);
   }, []);
 
-  const refreshData = useCallback(async () => {
-    setAssetLibraryReady(false);
+  const refreshData = useCallback(async ({ preferCache = false, userHint = null } = {}) => {
+    if (!preferCache) setAssetLibraryReady(false);
     try {
-      const currentUser = await getCurrentUser();
+      const currentUser = userHint || await getCurrentUser();
       setUser(currentUser);
       if (currentUser) {
+        const cached = readDashboardCache(currentUser.id);
+        if (cached) {
+          setJobs(Array.isArray(cached.jobs) ? cached.jobs : []);
+          setCreditHistory(Array.isArray(cached.creditHistory) ? cached.creditHistory : []);
+          setStudioAssets(mergeDefaultStudioAssets(Array.isArray(cached.studioAssets) ? cached.studioAssets : []));
+          setModelAssets(mergeDefaultModelAssets(Array.isArray(cached.modelAssets) ? cached.modelAssets : []));
+          setProductAssets(mergeProductAssets(Array.isArray(cached.productAssets) ? cached.productAssets : []));
+          setAssetLibraryReady(true);
+          hasLoadedRemoteAssetLibraryRef.current = true;
+          setLoading(false);
+          if (preferCache && Date.now() - Number(cached.savedAt || 0) < DASHBOARD_CACHE_TTL_MS) {
+            return;
+          }
+        }
         const [nextJobs, nextCreditHistory] = await Promise.all([
           listJobs(currentUser.id),
           listCreditHistory(currentUser.id),
@@ -8974,27 +9024,52 @@ export default function App() {
               setStudioAssets(mergeDefaultStudioAssets(migratedLib.studio));
               setModelAssets(mergeDefaultModelAssets(migratedLib.models));
               setProductAssets(mergeProductAssets(migratedLib.products));
+              writeDashboardCache(currentUser.id, {
+                jobs: nextJobs,
+                creditHistory: nextCreditHistory,
+                studioAssets: migratedLib.studio,
+                modelAssets: migratedLib.models,
+                productAssets: migratedLib.products,
+              });
               hasLoadedRemoteAssetLibraryRef.current = true;
               setAssetLibraryReady(true);
               return;
             }
           }
-          setStudioAssets(mergeDefaultStudioAssets(remoteLib.studio));
-          setModelAssets(mergeDefaultModelAssets(remoteLib.models));
+          const mergedStudioAssets = mergeDefaultStudioAssets(remoteLib.studio);
+          const mergedModelAssets = mergeDefaultModelAssets(remoteLib.models);
+          setStudioAssets(mergedStudioAssets);
+          setModelAssets(mergedModelAssets);
           const remoteProductMeta = mergeProductAssets(remoteLib.products);
           const remoteHydratedProducts = await hydrateProductAssetsFromDb(currentUser.id, remoteProductMeta);
           setProductAssets(remoteHydratedProducts);
+          writeDashboardCache(currentUser.id, {
+            jobs: nextJobs,
+            creditHistory: nextCreditHistory,
+            studioAssets: mergedStudioAssets,
+            modelAssets: mergedModelAssets,
+            productAssets: remoteHydratedProducts,
+          });
           hasLoadedRemoteAssetLibraryRef.current = true;
         } catch {
           // If remote has succeeded at least once in this session, keep current UI state on transient failures.
           // Falling back to local after remote success can resurrect deleted assets from stale cache.
           if (!hasLoadedRemoteAssetLibraryRef.current) {
             const lib = readAssetLibrary(currentUser.id);
-            setStudioAssets(mergeDefaultStudioAssets(lib.studio));
-            setModelAssets(mergeDefaultModelAssets(lib.models));
+            const mergedStudioAssets = mergeDefaultStudioAssets(lib.studio);
+            const mergedModelAssets = mergeDefaultModelAssets(lib.models);
+            setStudioAssets(mergedStudioAssets);
+            setModelAssets(mergedModelAssets);
             const productMeta = mergeProductAssets(lib.products);
             const hydratedProducts = await hydrateProductAssetsFromDb(currentUser.id, productMeta);
             setProductAssets(hydratedProducts);
+            writeDashboardCache(currentUser.id, {
+              jobs: nextJobs,
+              creditHistory: nextCreditHistory,
+              studioAssets: mergedStudioAssets,
+              modelAssets: mergedModelAssets,
+              productAssets: hydratedProducts,
+            });
           }
         }
         setAssetLibraryReady(true);
@@ -9006,6 +9081,7 @@ export default function App() {
         setProductAssets([]);
         setAssetLibraryReady(false);
         hasLoadedRemoteAssetLibraryRef.current = false;
+        clearDashboardCache(userHint?.id);
       }
     } catch (error) {
       console.error("[refreshData] failed", error);
@@ -9029,7 +9105,7 @@ export default function App() {
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      void refreshData();
+      void refreshData({ preferCache: true });
     }, 0);
     return () => clearTimeout(timer);
   }, [refreshData]);
@@ -9040,7 +9116,7 @@ export default function App() {
       if (!isDemoSession()) {
         startDemoSession();
       }
-      void refreshData();
+      void refreshData({ preferCache: true });
     }, 0);
     return () => clearTimeout(timer);
   }, [refreshData, route]);
@@ -9146,13 +9222,13 @@ export default function App() {
       <LoginPage
         defaultTab={route === "/signup" ? "signup" : "login"}
         onLogin={async ({ email, password }) => {
-          await login({ email, password });
-          await refreshData();
+          const loggedInUser = await login({ email, password });
+          await refreshData({ preferCache: true, userHint: loggedInUser });
           navigate("/app");
         }}
         onSignup={async ({ email, password }) => {
-          await signup({ email, password });
-          await refreshData();
+          const signedUpUser = await signup({ email, password });
+          await refreshData({ userHint: signedUpUser });
           setPendingName("");
           setNameSetupError("");
           setShowNameSetup(true);
@@ -9179,13 +9255,13 @@ export default function App() {
         <LoginPage
           defaultTab="login"
           onLogin={async ({ email, password }) => {
-            await login({ email, password });
-            await refreshData();
+            const loggedInUser = await login({ email, password });
+            await refreshData({ preferCache: true, userHint: loggedInUser });
             navigate("/app");
           }}
           onSignup={async ({ email, password }) => {
-            await signup({ email, password });
-            await refreshData();
+            const signedUpUser = await signup({ email, password });
+            await refreshData({ userHint: signedUpUser });
             setPendingName("");
             setNameSetupError("");
             setShowNameSetup(true);
@@ -9274,12 +9350,14 @@ export default function App() {
           }}
           onSignup={async () => {
             if (user?.isDemo) {
+              clearDashboardCache(user.id);
               await logout();
               await refreshData();
             }
             navigate("/signup");
           }}
           onLogout={async () => {
+            if (user?.id) clearDashboardCache(user.id);
             await logout();
             await refreshData();
           }}
