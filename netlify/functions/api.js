@@ -3,6 +3,30 @@ import { randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/$/, "");
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
 const SUPABASE_STORAGE_BUCKET = String(process.env.SUPABASE_STORAGE_BUCKET || "app-assets");
+const FASHN_API_KEY = String(process.env.FASHN_API_KEY || "");
+const FASHN_BASE_URL = String(process.env.FASHN_BASE_URL || "https://api.fashn.ai/v1").replace(/\/$/, "");
+const FASHN_TRYON_MAX_MODEL_NAME = "tryon-max";
+const FASHN_TRYON_V16_MODEL_NAME = "tryon-v1.6";
+const HIGH_QUALITY_PLANS = new Set(["growth", "business", "enterprise", "custom", "standard", "pro"]);
+const CREDIT_BY_STYLE = {
+  torso: 1,
+  mannequin: 1,
+  hanger: 1,
+  ghost: 1,
+  model: 1,
+  custom: 3,
+};
+const MODEL_RUN_CREDIT_BY_STRATEGY = {
+  "tryon-v1.6": 1,
+  "tryon-max": 4,
+  "product-to-model": 1,
+};
+const BACKGROUND_EDIT_PROMPT = [
+  "Replace the background with the provided image.",
+  "Treat the background as the primary scene and place the subject naturally within that environment.",
+  "Match perspective, lighting, depth, shadow softness, and subject placement realistically.",
+  "Do not alter facial identity or garment details.",
+].join("\n");
 
 function corsHeaders() {
   return {
@@ -27,8 +51,26 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function compactTimestamp(source = null) {
+  const d = source ? new Date(source) : new Date();
+  const yyyy = d.getFullYear();
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mi = String(d.getMinutes()).padStart(2, "0");
+  const ss = String(d.getSeconds()).padStart(2, "0");
+  return `${yyyy}${mm}${dd}-${hh}${mi}${ss}`;
+}
+
 function id(prefix) {
   return `${prefix}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function buildOutputFileName({ style = "torso", seq = 1, createdAt = null, ext = "jpg" }) {
+  const safeStyle = String(style || "torso").toLowerCase().replace(/[^a-z0-9_-]/g, "") || "torso";
+  const safeExt = String(ext || "jpg").toLowerCase().replace(/[^a-z0-9]/g, "") || "jpg";
+  const safeSeq = String(seq || 1).padStart(2, "0");
+  return `torso-ai-${compactTimestamp(createdAt)}-${safeStyle}-${safeSeq}.${safeExt}`;
 }
 
 function getRoutePath(event) {
@@ -272,6 +314,518 @@ function extFromMime(mime) {
   return ".jpg";
 }
 
+function mimeFromUrl(url) {
+  const lower = String(url || "").toLowerCase();
+  if (lower.endsWith(".png")) return "image/png";
+  if (lower.endsWith(".webp")) return "image/webp";
+  return "image/jpeg";
+}
+
+function normalizeModelRunStrategy(value) {
+  const v = String(value || "auto").trim().toLowerCase();
+  if (v === "tryon" || v === "try-on" || v === "tryon-max" || v === "try-on-max" || v === "tryon-pro" || v === "try-on-pro") {
+    return "tryon-max";
+  }
+  if (v === "tryon-v1.6" || v === "try-on-v1.6" || v === "v1.6" || v === "tryon16") return "tryon-v1.6";
+  if (v === "product-to-model" || v === "product_to_model" || v === "producttomodel" || v === "product") {
+    return "product-to-model";
+  }
+  return "auto";
+}
+
+function normalizeStyleConfig(style, outputPreset, rawConfig = {}) {
+  const cfg = typeof rawConfig === "object" && rawConfig ? rawConfig : {};
+  const bg = typeof cfg.background === "object" && cfg.background ? cfg.background : {};
+  const ratioRaw = String(cfg.aspectRatio || outputPreset || "fourThree");
+  const ratioMap = {
+    default: "4:3",
+    oneOne: "1:1",
+    threeFour: "3:4",
+    fourThree: "4:3",
+    nineSixteen: "9:16",
+    sixteenNine: "16:9",
+    twoThree: "2:3",
+    threeTwo: "3:2",
+    fourFive: "4:5",
+    fiveFour: "5:4",
+    square: "1:1",
+  };
+  return {
+    mode: String(cfg.mode || style || "torso"),
+    aspectRatio: ratioMap[ratioRaw] || ratioRaw,
+    targetGender: String(cfg.targetGender || "womens"),
+    orientation: String(cfg.orientation || "front"),
+    framing: String(cfg.framing || "full"),
+    background: {
+      type: String(bg.type || "solid"),
+      color: String(bg.color || "#FFFFFF"),
+    },
+    lighting: String(cfg.lighting || "soft"),
+    quality: String(cfg.quality || "standard"),
+    preserveDetails: cfg.preserveDetails !== false,
+    customPrompt: String(cfg.customPrompt || ""),
+  };
+}
+
+function resolveFashnResolution(styleConfig) {
+  return styleConfig?.quality === "high" ? "4k" : "1k";
+}
+
+function resolveFashnOutputFormat() {
+  return "png";
+}
+
+function hasExtraTryonInstructions(styleConfig) {
+  if (!styleConfig || typeof styleConfig !== "object") return false;
+  if (String(styleConfig.customPrompt || "").trim()) return true;
+  if (String(styleConfig.orientation || "front") !== "front") return true;
+  if (String(styleConfig.framing || "focus") !== "focus") return true;
+  return false;
+}
+
+function resolveTryonVariant(modelRunStrategy, styleConfig) {
+  const normalized = normalizeModelRunStrategy(modelRunStrategy || "auto");
+  if (normalized === "tryon-v1.6" || normalized === "tryon-max") return normalized;
+  return hasExtraTryonInstructions(styleConfig) ? "tryon-max" : "tryon-v1.6";
+}
+
+function resolveEffectiveRunStrategy(style, requestedModelRunStrategy, styleConfig) {
+  const normalizedStyle = String(style || "");
+  if (normalizedStyle === "model") {
+    const requested = normalizeModelRunStrategy(requestedModelRunStrategy || "auto");
+    if (requested === "product-to-model") return "product-to-model";
+    return resolveTryonVariant(requested, styleConfig);
+  }
+  if (normalizedStyle === "torso" || normalizedStyle === "mannequin") {
+    const requested = normalizeModelRunStrategy(requestedModelRunStrategy || "product-to-model");
+    return requested === "tryon-max" ? "tryon-max" : "product-to-model";
+  }
+  return "product-to-model";
+}
+
+function isTryonStrategy(strategy) {
+  return strategy === "tryon-v1.6" || strategy === "tryon-max";
+}
+
+function resolveBaseCreditRate(style, effectiveRunStrategy) {
+  if (style === "model") return MODEL_RUN_CREDIT_BY_STRATEGY[effectiveRunStrategy || "tryon-v1.6"] || 1;
+  if (effectiveRunStrategy === "tryon-max") return MODEL_RUN_CREDIT_BY_STRATEGY["tryon-max"];
+  return CREDIT_BY_STYLE[style] || 1;
+}
+
+function resolveQualitySurcharge(styleConfig, effectiveRunStrategy) {
+  if (isTryonStrategy(effectiveRunStrategy)) return 0;
+  return styleConfig?.quality === "high" ? 1 : 0;
+}
+
+function resolveModelReferenceSurcharge(style, modelAssetId, effectiveRunStrategy) {
+  if (!modelAssetId || style === "model") return 0;
+  if (effectiveRunStrategy === "tryon-max") return 0;
+  return 1;
+}
+
+function resolveBackgroundEditSurcharge(backgroundMode, backgroundReference) {
+  if (String(backgroundMode || "solid").toLowerCase() !== "image") return 0;
+  return String(backgroundReference || "").trim() ? 1 : 0;
+}
+
+function getRequestOrigin(event) {
+  const proto = String(event?.headers?.["x-forwarded-proto"] || event?.headers?.["X-Forwarded-Proto"] || "https");
+  const host = String(event?.headers?.host || event?.headers?.Host || "");
+  if (!host) return "";
+  return `${proto}://${host}`;
+}
+
+function toAbsoluteUrl(event, value) {
+  const raw = String(value || "").trim();
+  if (!raw) return "";
+  if (raw.startsWith("data:")) return raw;
+  if (/^https?:\/\//i.test(raw)) return raw;
+  if (!raw.startsWith("/")) return raw;
+  const origin = getRequestOrigin(event);
+  return origin ? `${origin}${raw}` : raw;
+}
+
+function getPromptReferenceUrl(event, styleMode) {
+  const origin = getRequestOrigin(event);
+  if (!origin) return "";
+  if (styleMode === "torso") return `${origin}/torsoprompt.png`;
+  if (styleMode === "mannequin") return `${origin}/mannequinprompt.png`;
+  if (styleMode === "hanger") return `${origin}/hangerprompt.png`;
+  return "";
+}
+
+function buildPromptFromConfig(styleConfig) {
+  const mode = String(styleConfig?.mode || "torso");
+  const baseByMode = {
+    torso: "Place the garment on the provided torso mannequin. No head. No arms. Keep the garment fully faithful to the source image.",
+    mannequin: "Place the garment on the provided full-body mannequin. Do not add extra clothing or accessories. Keep the garment fully faithful to the source image.",
+    hanger: "Present the garment on a hanger centered on a clean studio background. Keep the garment fully faithful to the source image.",
+    ghost: "Create a high-end ghost mannequin style e-commerce image. Keep the garment fully faithful to the source image.",
+    model: "Create a premium fashion editorial model shot while preserving the garment design and details exactly.",
+    custom: String(styleConfig?.customPrompt || "").trim() || "Create a premium fashion image while preserving the garment exactly.",
+  };
+  const backgroundLine = String(styleConfig?.background?.type || "solid") === "transparent"
+    ? "Use a transparent or clean cutout background."
+    : String(styleConfig?.background?.type || "solid") === "studio"
+      ? "Use a premium fashion studio background."
+      : "Use a clean neutral studio background.";
+  const framingLine = String(styleConfig?.framing || "full") === "focus"
+    ? "Use product-focused framing and keep the garment as the clear main subject."
+    : "Keep the full subject composition visible.";
+  const orientationLine = String(styleConfig?.orientation || "front") === "front"
+    ? "Front-facing composition."
+    : `Orientation: ${String(styleConfig?.orientation || "front")}.`;
+  const qualityLine = styleConfig?.quality === "high"
+    ? "Prioritize premium detail retention and sharp material texture."
+    : "Keep clean e-commerce quality with realistic texture.";
+  return [
+    baseByMode[mode] || baseByMode.torso,
+    backgroundLine,
+    framingLine,
+    orientationLine,
+    qualityLine,
+    String(styleConfig?.customPrompt || "").trim(),
+  ].filter(Boolean).join(" ");
+}
+
+async function fashnRequest(path, options = {}) {
+  if (!FASHN_API_KEY) {
+    throw new Error("FASHN_API_KEY is missing");
+  }
+  const timeoutMs = Number(options.timeoutMs) > 0 ? Number(options.timeoutMs) : 30000;
+  const { timeoutMs: _ignoredTimeoutMs, ...fetchOptions } = options;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  let response;
+  try {
+    response = await fetch(`${FASHN_BASE_URL}${path}`, {
+      ...fetchOptions,
+      signal: controller.signal,
+      headers: {
+        Authorization: `Bearer ${FASHN_API_KEY}`,
+        "Content-Type": "application/json",
+        ...(fetchOptions.headers || {}),
+      },
+    });
+  } catch (error) {
+    if (error && typeof error === "object" && String(error.name || "") === "AbortError") {
+      throw new Error(`FASHN request timeout: ${path}`);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new Error(data?.message || data?.error || `FASHN error ${response.status}`);
+  }
+  return data;
+}
+
+async function waitForPrediction(predictionId, maxPolls = 90, pollMs = 2000) {
+  const terminalStatuses = new Set(["completed", "complete", "succeeded", "success", "failed", "error", "cancelled", "canceled"]);
+  for (let i = 0; i < maxPolls; i += 1) {
+    await new Promise((resolve) => setTimeout(resolve, pollMs));
+    const statusRes = await fashnRequest(`/status/${predictionId}`);
+    const status = String(statusRes?.status || "").toLowerCase();
+    if (terminalStatuses.has(status)) return statusRes;
+  }
+  return { status: "failed", error: "FASHN timeout", output: [] };
+}
+
+function extractOutputUrls(statusRes) {
+  const collect = [];
+  const pushValue = (value) => {
+    if (!value) return;
+    if (Array.isArray(value)) {
+      value.forEach(pushValue);
+      return;
+    }
+    if (typeof value === "string") {
+      if (value.trim()) collect.push(value.trim());
+      return;
+    }
+    if (typeof value === "object") {
+      const urlLike = value.url || value.output || value.output_url || value.outputUrl || value.image || value.src;
+      if (typeof urlLike === "string" && urlLike.trim()) collect.push(urlLike.trim());
+    }
+  };
+  if (!statusRes || typeof statusRes !== "object") return [];
+  pushValue(statusRes.output);
+  pushValue(statusRes.outputs);
+  pushValue(statusRes.output_url);
+  pushValue(statusRes.outputUrl);
+  pushValue(statusRes.result?.output);
+  pushValue(statusRes.result?.outputs);
+  pushValue(statusRes.result?.images);
+  pushValue(statusRes.result?.image_urls);
+  pushValue(statusRes.data?.output);
+  pushValue(statusRes.data?.outputs);
+  pushValue(statusRes.data?.images);
+  pushValue(statusRes.data?.image_urls);
+  pushValue(statusRes.images);
+  pushValue(statusRes.image_urls);
+  pushValue(statusRes.artifacts);
+  pushValue(statusRes.result?.artifacts);
+  pushValue(statusRes.data?.artifacts);
+  pushValue(statusRes.prediction?.output);
+  pushValue(statusRes.prediction?.outputs);
+  pushValue(statusRes.prediction?.images);
+  pushValue(statusRes.prediction?.image_urls);
+  return collect.filter(Boolean);
+}
+
+async function appendCreditEvent(userId, eventType, delta, payload = {}, balanceAfter = null) {
+  await supabaseRequest("/app_credit_events", {
+    method: "POST",
+    body: {
+      user_id: userId,
+      event_type: eventType,
+      delta: Number(delta || 0),
+      balance_after: balanceAfter == null ? null : Number(balanceAfter),
+      payload,
+    },
+  });
+}
+
+async function appendJobEvent(userId, jobId, eventType, payload = {}) {
+  await supabaseRequest("/app_job_events", {
+    method: "POST",
+    body: {
+      user_id: userId,
+      job_id: jobId,
+      event_type: eventType,
+      payload,
+    },
+  });
+}
+
+async function updateUserCredits(userId, nextCredits) {
+  const rows = await supabaseRequest(`/app_users?user_id=eq.${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    body: { credits: Number(nextCredits || 0) },
+  });
+  return Array.isArray(rows) ? rows[0] || null : null;
+}
+
+async function updateJobRow(jobId, payload) {
+  const rows = await supabaseRequest(`/app_jobs?job_id=eq.${encodeURIComponent(jobId)}`, {
+    method: "PATCH",
+    body: payload,
+  });
+  return Array.isArray(rows) ? rows[0] || null : null;
+}
+
+async function updateJobItemRow(itemId, payload) {
+  const rows = await supabaseRequest(`/app_job_items?item_id=eq.${encodeURIComponent(itemId)}`, {
+    method: "PATCH",
+    body: payload,
+  });
+  return Array.isArray(rows) ? rows[0] || null : null;
+}
+
+async function persistRemoteImageToStorage(url, relPath) {
+  const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`failed to fetch generated image: ${response.status}`);
+  }
+  const buffer = Buffer.from(await response.arrayBuffer());
+  const contentType = response.headers.get("content-type") || mimeFromUrl(url);
+  return storageUpload(relPath, buffer, contentType);
+}
+
+async function runPayload(event, style, imageRef, outputPreset, options = {}) {
+  const {
+    modelImageRef = "",
+    faceReferenceRef = "",
+    backgroundReferenceRef = "",
+    randomModelPrompt = "",
+    styleConfig: rawStyleConfig = null,
+    modelRunStrategy = "auto",
+  } = options;
+  const styleConfig = normalizeStyleConfig(style, outputPreset, rawStyleConfig);
+  const prompt = buildPromptFromConfig(styleConfig);
+  const resolution = resolveFashnResolution(styleConfig);
+  const outputFormat = resolveFashnOutputFormat();
+  const normalizedProductImageRef = toAbsoluteUrl(event, imageRef);
+  const normalizedModelImageRef = toAbsoluteUrl(event, modelImageRef);
+  const normalizedFaceReferenceRef = toAbsoluteUrl(event, faceReferenceRef);
+  const normalizedBackgroundReferenceRef = toAbsoluteUrl(event, backgroundReferenceRef);
+  const styleImageReference = getPromptReferenceUrl(event, styleConfig.mode);
+  const effectiveRunStrategy = resolveEffectiveRunStrategy(styleConfig.mode, modelRunStrategy, styleConfig);
+
+  if (effectiveRunStrategy === "tryon-v1.6" || effectiveRunStrategy === "tryon-max") {
+    const tryonModelImage = normalizedModelImageRef || styleImageReference;
+    if (!tryonModelImage) throw new Error("モデル参照画像が未選択です");
+    const inputs = {
+      model_image: tryonModelImage,
+      ...(effectiveRunStrategy === "tryon-max"
+        ? { product_image: normalizedProductImageRef }
+        : { garment_image: normalizedProductImageRef }),
+    };
+    if (effectiveRunStrategy === "tryon-v1.6") {
+      inputs.mode = "quality";
+      inputs.moderation_level = "none";
+      inputs.garment_photo_type = "auto";
+      inputs.seed = 42;
+      inputs.output_format = outputFormat === "jpg" ? "jpeg" : outputFormat;
+    }
+    if (effectiveRunStrategy === "tryon-max" && prompt.trim()) {
+      inputs.prompt = prompt;
+      if (String(styleConfig?.aspectRatio || "").trim()) inputs.aspect_ratio = String(styleConfig.aspectRatio).trim();
+      inputs.seed = 42;
+      inputs.output_format = outputFormat === "jpg" ? "jpeg" : outputFormat;
+    }
+    return {
+      model_name: effectiveRunStrategy === "tryon-max" ? FASHN_TRYON_MAX_MODEL_NAME : FASHN_TRYON_V16_MODEL_NAME,
+      inputs,
+    };
+  }
+
+  const productToModelPrompt = String(randomModelPrompt || "").trim()
+    ? `${prompt} Random model appearance requirements: ${String(randomModelPrompt || "").trim()}`
+    : prompt;
+  const inputs = {
+    product_image: normalizedProductImageRef,
+    prompt: productToModelPrompt,
+    num_images: 1,
+    output_format: outputFormat,
+    resolution,
+    ...(String(styleConfig?.aspectRatio || "").trim() ? { aspect_ratio: String(styleConfig.aspectRatio).trim() } : {}),
+  };
+  const isModelOnReference = styleConfig.mode === "model";
+  const modelRefForRun = isModelOnReference ? normalizedModelImageRef : (normalizedModelImageRef || styleImageReference);
+  const shouldAvoidModelImage = Boolean(normalizedBackgroundReferenceRef);
+  if (isModelOnReference && normalizedModelImageRef && shouldAvoidModelImage) {
+    inputs.image_prompt = normalizedModelImageRef;
+  } else if (modelRefForRun && !shouldAvoidModelImage) {
+    inputs.model_image = modelRefForRun;
+  }
+  if (normalizedFaceReferenceRef) inputs.face_reference = normalizedFaceReferenceRef;
+  if (normalizedBackgroundReferenceRef) inputs.background_reference = normalizedBackgroundReferenceRef;
+  return { model_name: "product-to-model", inputs };
+}
+
+function buildBackgroundEditPayload(event, subjectImageRef, backgroundImageRef, styleConfig) {
+  const normalizedStyleConfig = normalizeStyleConfig(String(styleConfig?.mode || "torso"), "fourThree", styleConfig || {});
+  const outputFormat = resolveFashnOutputFormat();
+  const resolution = resolveFashnResolution(normalizedStyleConfig);
+  return {
+    model_name: "edit",
+    inputs: {
+      image: toAbsoluteUrl(event, subjectImageRef),
+      image_context: toAbsoluteUrl(event, backgroundImageRef),
+      prompt: BACKGROUND_EDIT_PROMPT,
+      output_format: outputFormat === "jpg" ? "jpeg" : outputFormat,
+      resolution,
+    },
+  };
+}
+
+function itemErrorHint(message) {
+  const msg = String(message || "").toLowerCase();
+  if (msg.includes("fashn_api_key is missing")) return "APIキーが未設定です。Netlify の環境変数を確認してください。";
+  if (msg.includes("timeout")) return "タイムアウト。画像サイズを小さくして再試行してください。";
+  if (msg.includes("invalid")) return "入力画像または生成パラメータを確認してください。";
+  return "画像の背景が複雑、または服が見切れている可能性があります。";
+}
+
+async function processJobItem(event, job, item, requestOptions) {
+  const originalStyleConfig = requestOptions.styleConfig || {
+    mode: job.style,
+    aspectRatio: job.outputPreset,
+    background: {
+      type: requestOptions.backgroundMode === "image" ? "image" : "solid",
+      color: requestOptions.backgroundColor || "#FFFFFF",
+    },
+    customPrompt: requestOptions.customPrompt || "",
+    quality: "standard",
+    preserveDetails: true,
+  };
+  await updateJobItemRow(item.id, { status: "processing", error: null, error_hint: null });
+  await updateJobRow(job.id, { status: "processing" });
+  await appendJobEvent(job.userId, job.id, "item_processing", { itemId: item.id });
+
+  try {
+    const useDirectBackgroundReference = job.style === "model"
+      && requestOptions.effectiveModelRunStrategy === "product-to-model"
+      && String(requestOptions.backgroundMode || "solid") === "image"
+      && String(requestOptions.backgroundReference || "").trim()
+      && !String(requestOptions.modelReference || "").trim();
+    const stageOneStyleConfig = String(requestOptions.backgroundMode || "solid") === "image" && !useDirectBackgroundReference
+      ? {
+        ...originalStyleConfig,
+        background: { type: "solid", color: "#FFFFFF" },
+      }
+      : originalStyleConfig;
+    const payload = await runPayload(event, job.style, item.inputRef, job.outputPreset, {
+      modelImageRef: requestOptions.modelReference || "",
+      faceReferenceRef: requestOptions.faceReference || "",
+      backgroundReferenceRef: useDirectBackgroundReference ? (requestOptions.backgroundReference || "") : "",
+      randomModelPrompt: requestOptions.randomModelPrompt || "",
+      styleConfig: stageOneStyleConfig,
+      modelRunStrategy: requestOptions.modelRunStrategy,
+    });
+    const runRes = await fashnRequest("/run", {
+      method: "POST",
+      body: JSON.stringify(payload),
+      timeoutMs: 45000,
+    });
+    await appendJobEvent(job.userId, job.id, "fashn_run_started", {
+      itemId: item.id,
+      predictionId: runRes.id,
+      effectiveModelRunStrategy: requestOptions.effectiveModelRunStrategy,
+    });
+    const statusRes = await waitForPrediction(runRes.id, 90, 2000);
+    const predictionStatus = String(statusRes?.status || "").toLowerCase();
+    let outputUrl = extractOutputUrls(statusRes)[0] || "";
+    const isCompletedLike = ["completed", "complete", "succeeded", "success"].includes(predictionStatus);
+    if (!isCompletedLike && !outputUrl) {
+      throw new Error(statusRes?.error || "FASHN timeout");
+    }
+    const shouldRunBackgroundEdit = String(requestOptions.backgroundMode || "solid") === "image"
+      && String(requestOptions.backgroundReference || "").trim()
+      && !useDirectBackgroundReference;
+    if (outputUrl && shouldRunBackgroundEdit) {
+      const editRunRes = await fashnRequest("/run", {
+        method: "POST",
+        body: JSON.stringify(buildBackgroundEditPayload(event, outputUrl, requestOptions.backgroundReference, originalStyleConfig)),
+        timeoutMs: 45000,
+      });
+      const editStatusRes = await waitForPrediction(editRunRes.id, 120, 2000);
+      if (!["completed", "complete", "succeeded", "success"].includes(String(editStatusRes?.status || "").toLowerCase())) {
+        throw new Error(editStatusRes?.error || "FASHN edit timeout");
+      }
+      outputUrl = extractOutputUrls(editStatusRes)[0] || "";
+      if (!outputUrl) throw new Error("FASHN edit output is empty");
+    }
+    const outputExt = extFromMime(mimeFromUrl(outputUrl)).replace(/^\./, "") || "jpg";
+    const storagePath = `${job.userId}/jobs-outputs/${job.id}/${item.id}.${outputExt}`;
+    const publicUrl = await persistRemoteImageToStorage(outputUrl, storagePath);
+    await updateJobItemRow(item.id, {
+      status: "done",
+      output_url: publicUrl,
+      output_name: buildOutputFileName({ style: job.style, seq: item.outputSequence, createdAt: job.createdAt, ext: outputExt }),
+      credit_used: Number(job.creditRate || 0),
+      error: null,
+      error_hint: null,
+    });
+    await appendJobEvent(job.userId, job.id, "item_done", { itemId: item.id });
+    return { ok: true };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error || "unknown error");
+    await updateJobItemRow(item.id, {
+      status: "error",
+      error: message,
+      error_hint: itemErrorHint(message),
+      credit_used: 0,
+    });
+    await appendJobEvent(job.userId, job.id, "item_error", { itemId: item.id, error: message });
+    return { ok: false, error: message };
+  }
+}
+
 export async function handler(event) {
   if (event.httpMethod === "OPTIONS") return { statusCode: 204, headers: corsHeaders(), body: "" };
 
@@ -421,6 +975,190 @@ export async function handler(event) {
       if (!userId) return json(400, { error: "userId is required" });
       const jobs = await listJobsForUser(userId);
       return json(200, { jobs });
+    }
+
+    if (method === "POST" && path === "/jobs") {
+      const body = parseBody(event);
+      const userId = String(body.userId || "").trim();
+      const style = String(body.style || "torso").trim();
+      const files = Array.isArray(body.files) ? body.files : [];
+      const outputPreset = String(body.outputPreset || "fourThree");
+      const rawStyleConfig = typeof body.styleConfig === "object" && body.styleConfig ? body.styleConfig : null;
+      const backgroundAssetId = body.backgroundAssetId ? String(body.backgroundAssetId) : null;
+      const backgroundMode = String(body.backgroundMode || "solid");
+      const backgroundColor = String(body.backgroundColor || "#FFFFFF");
+      const modelAssetId = body.modelAssetId ? String(body.modelAssetId) : null;
+      const modelReference = String(body.modelReference || "");
+      const faceReference = String(body.faceReference || "");
+      const modelRunStrategy = normalizeModelRunStrategy(body.modelRunStrategy || "auto");
+      const backgroundReference = String(body.backgroundReference || "");
+      const customPrompt = String(body.customPrompt || "");
+      const randomModelPrompt = String(body.randomModelPrompt || "");
+
+      if (!userId) return json(400, { error: "userId is required" });
+      if (!CREDIT_BY_STYLE[style]) return json(400, { error: "invalid style" });
+      if (!files.length) return json(400, { error: "files are required" });
+
+      const user = await getUserById(userId);
+      if (!user) return json(404, { error: "user not found" });
+
+      const normalizedStyleConfig = normalizeStyleConfig(style, outputPreset, rawStyleConfig);
+      const effectiveModelRunStrategy = resolveEffectiveRunStrategy(style, modelRunStrategy, normalizedStyleConfig);
+      const qualitySurcharge = resolveQualitySurcharge(normalizedStyleConfig, effectiveModelRunStrategy);
+      const modelReferenceSurcharge = resolveModelReferenceSurcharge(style, modelAssetId, effectiveModelRunStrategy);
+      const backgroundEditSurcharge = resolveBackgroundEditSurcharge(backgroundMode, backgroundReference);
+
+      if (qualitySurcharge > 0 && !HIGH_QUALITY_PLANS.has(String(user.plan_id || "growth").toLowerCase())) {
+        return json(400, { error: "高画質はGrowth以上のプランで利用できます" });
+      }
+      if (backgroundMode === "image" && !backgroundReference.trim()) {
+        return json(400, { error: "背景画像を選択してください" });
+      }
+      if (style === "model" && effectiveModelRunStrategy === "tryon-max" && !modelReference.trim()) {
+        return json(400, { error: "Try-On Max には参照モデル画像が必要です" });
+      }
+
+      const normalizedFiles = files.map((file, index) => ({
+        id: id("itm"),
+        name: String(file?.name || `image-${index + 1}.jpg`),
+        mime: String(file?.type || "image/jpeg"),
+        inputRef: String(file?.url || file?.dataUrl || "").trim(),
+        relativePath: String(file?.name || `image-${index + 1}.jpg`),
+        outputSequence: index + 1,
+      }));
+      if (normalizedFiles.some((file) => !file.inputRef)) {
+        return json(400, { error: "uploaded file URL is required" });
+      }
+      if (normalizedFiles.some((file) => file.name.toLowerCase().endsWith(".zip"))) {
+        return json(400, { error: "ZIP はまだ Netlify Functions 版で未対応です。画像を直接アップロードしてください。" });
+      }
+
+      const baseStyleCreditRate = resolveBaseCreditRate(style, effectiveModelRunStrategy);
+      const creditRate = baseStyleCreditRate + qualitySurcharge + modelReferenceSurcharge + backgroundEditSurcharge;
+      const reservedCredits = normalizedFiles.length * creditRate;
+      const currentCredits = Number(user.credits || 0);
+      if (currentCredits < reservedCredits) {
+        return json(400, { error: `クレジット不足です。必要 ${reservedCredits}cr / 残り ${currentCredits}cr` });
+      }
+
+      const jobId = id("job");
+      const createdAt = nowIso();
+      const nextCredits = currentCredits - reservedCredits;
+      await updateUserCredits(userId, nextCredits);
+      await appendCreditEvent(userId, "job_reserved", -reservedCredits, {
+        jobId,
+        imageCount: normalizedFiles.length,
+        creditRate,
+        style,
+      }, nextCredits);
+
+      await supabaseRequest("/app_jobs", {
+        method: "POST",
+        body: {
+          job_id: jobId,
+          user_id: userId,
+          style,
+          status: "queued",
+          output_preset: outputPreset,
+          style_config: normalizedStyleConfig,
+          background_asset_id: backgroundAssetId,
+          model_asset_id: modelAssetId,
+          model_run_strategy: modelRunStrategy,
+          credit_rate: creditRate,
+          reserved_credits: reservedCredits,
+          credit_used: 0,
+          image_count: normalizedFiles.length,
+          processed_count: 0,
+          success_count: 0,
+          error_count: 0,
+          retry_attempt: 0,
+          created_at: createdAt,
+        },
+      });
+
+      await supabaseRequest("/app_job_items", {
+        method: "POST",
+        body: normalizedFiles.map((file) => ({
+          item_id: file.id,
+          job_id: jobId,
+          user_id: userId,
+          name: file.name,
+          relative_path: file.relativePath,
+          sku_guess: "",
+          mime: file.mime,
+          status: "queued",
+          error: null,
+          error_hint: null,
+          input_url: file.inputRef,
+          output_url: "",
+          output_name: null,
+          output_sequence: file.outputSequence,
+          credit_used: 0,
+          created_at: createdAt,
+        })),
+      });
+
+      await appendJobEvent(userId, jobId, "job_created", {
+        imageCount: normalizedFiles.length,
+        style,
+        outputPreset,
+        backgroundMode,
+        backgroundColor,
+        modelRunStrategy,
+        effectiveModelRunStrategy,
+      });
+
+      const job = {
+        id: jobId,
+        userId,
+        style,
+        outputPreset,
+        creditRate,
+        createdAt,
+      };
+      const requestOptions = {
+        styleConfig: normalizedStyleConfig,
+        backgroundMode,
+        backgroundColor,
+        modelReference,
+        faceReference,
+        backgroundReference,
+        modelRunStrategy,
+        effectiveModelRunStrategy,
+        customPrompt,
+        randomModelPrompt,
+      };
+
+      const results = [];
+      for (const file of normalizedFiles) {
+        results.push(await processJobItem(event, job, file, requestOptions));
+      }
+
+      const successCount = results.filter((result) => result.ok).length;
+      const errorCount = results.length - successCount;
+      const creditUsed = successCount * creditRate;
+      const finalStatus = successCount > 0 ? "done" : "error";
+
+      await updateJobRow(jobId, {
+        status: finalStatus,
+        processed_count: results.length,
+        success_count: successCount,
+        error_count: errorCount,
+        credit_used: creditUsed,
+      });
+
+      if (errorCount > 0) {
+        const refund = errorCount * creditRate;
+        const refundedUser = await updateUserCredits(userId, nextCredits + refund);
+        await appendCreditEvent(userId, "job_error_refund", refund, {
+          jobId,
+          refundedCount: errorCount,
+          creditRate,
+        }, Number(refundedUser?.credits || nextCredits + refund));
+      }
+
+      const finalJob = await getJobById(jobId);
+      return json(200, { job: finalJob });
     }
 
     if (method === "GET" && path.match(/^\/jobs\/[^/]+$/)) {
