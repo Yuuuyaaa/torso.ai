@@ -646,6 +646,13 @@ function fileToDataUrl(file) {
   });
 }
 
+function preloadImage(src) {
+  if (typeof window === "undefined" || !src) return;
+  const img = new Image();
+  img.decoding = "async";
+  img.src = src;
+}
+
 function extractDroppedFiles(dataTransfer) {
   if (!dataTransfer) return [];
   if (dataTransfer.files && dataTransfer.files.length > 0) {
@@ -1254,6 +1261,8 @@ function ImageCard({
           <img
             src={previewSrc}
             alt=""
+            loading="lazy"
+            decoding="async"
             style={{ width: "100%", height: "100%", objectFit: "cover" }}
             onLoad={() => setImgLoadError(false)}
             onError={() => setImgLoadError(true)}
@@ -2462,6 +2471,9 @@ function UploadPage({ user, jobs, onDataRefresh, onJobCreated, studioAssets = []
                       <img
                         src={opt.previewImage}
                         alt={`${opt.label}イメージ`}
+                        loading="eager"
+                        decoding="async"
+                        fetchPriority="high"
                         style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "center", display: "block" }}
                       />
                     </div>
@@ -8915,15 +8927,19 @@ export default function App() {
       const currentUser = await getCurrentUser();
       setUser(currentUser);
       if (currentUser) {
-        const nextJobs = await listJobs(currentUser.id);
-        const nextCreditHistory = await listCreditHistory(currentUser.id);
+        const [nextJobs, nextCreditHistory] = await Promise.all([
+          listJobs(currentUser.id),
+          listCreditHistory(currentUser.id),
+        ]);
         setJobs(nextJobs);
         setCreditHistory(nextCreditHistory);
         try {
-          const remoteLib = await fetchAssetLibrary(currentUser.id);
           const localLib = readAssetLibrary(currentUser.id);
           const localProductMeta = mergeProductAssets(localLib.products);
-          const localHydratedProducts = await hydrateProductAssetsFromDb(currentUser.id, localProductMeta);
+          const [remoteLib, localHydratedProducts] = await Promise.all([
+            fetchAssetLibrary(currentUser.id),
+            hydrateProductAssetsFromDb(currentUser.id, localProductMeta),
+          ]);
           const localHasAssets = (localLib.studio || []).length > 0
             || (localLib.models || []).length > 0
             || (localHydratedProducts || []).length > 0;
@@ -8998,6 +9014,11 @@ export default function App() {
       setLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    STYLE_OPTIONS.forEach((opt) => preloadImage(opt.previewImage));
+  }, [user]);
 
   const openDemo = useCallback(async () => {
     startDemoSession();
