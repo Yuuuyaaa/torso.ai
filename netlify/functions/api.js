@@ -73,6 +73,10 @@ function buildOutputFileName({ style = "torso", seq = 1, createdAt = null, ext =
   return `torso-ai-${compactTimestamp(createdAt)}-${safeStyle}-${safeSeq}.${safeExt}`;
 }
 
+function isUuid(value) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(String(value || "").trim());
+}
+
 function getRoutePath(event) {
   const rawPath = String(event?.path || event?.rawUrl || "");
   return rawPath
@@ -1006,16 +1010,19 @@ export async function handler(event) {
       const files = Array.isArray(body.files) ? body.files : [];
       const outputPreset = String(body.outputPreset || "fourThree");
       const rawStyleConfig = typeof body.styleConfig === "object" && body.styleConfig ? body.styleConfig : null;
-      const backgroundAssetId = body.backgroundAssetId ? String(body.backgroundAssetId) : null;
+      const backgroundAssetIdRaw = body.backgroundAssetId ? String(body.backgroundAssetId) : null;
       const backgroundMode = String(body.backgroundMode || "solid");
       const backgroundColor = String(body.backgroundColor || "#FFFFFF");
-      const modelAssetId = body.modelAssetId ? String(body.modelAssetId) : null;
+      const modelAssetIdRaw = body.modelAssetId ? String(body.modelAssetId) : null;
       const modelReference = String(body.modelReference || "");
       const faceReference = String(body.faceReference || "");
       const modelRunStrategy = normalizeModelRunStrategy(body.modelRunStrategy || "auto");
       const backgroundReference = String(body.backgroundReference || "");
       const customPrompt = String(body.customPrompt || "");
       const randomModelPrompt = String(body.randomModelPrompt || "");
+
+      const backgroundAssetId = isUuid(backgroundAssetIdRaw) ? backgroundAssetIdRaw : null;
+      const modelAssetId = isUuid(modelAssetIdRaw) ? modelAssetIdRaw : null;
 
       if (!userId) return json(400, { error: "userId is required" });
       if (!CREDIT_BY_STYLE[style]) return json(400, { error: "invalid style" });
