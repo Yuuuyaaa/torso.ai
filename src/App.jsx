@@ -574,17 +574,23 @@ const SOLID_BACKGROUND_COLORS = [
 function builtInStorageUrl(_relPath, fallbackPublicPath) {
   return fallbackPublicPath;
 }
+function builtInPreviewUrl(fileName) {
+  return `/optimized/${fileName.replace(/\.[^.]+$/, ".jpg")}`;
+}
+function getAssetThumbnailUrl(asset) {
+  return asset?.previewUrl || asset?.outputUrl || asset?.dataUrl || "";
+}
 const DEFAULT_STUDIO_ASSETS = [
-  { id: "bg1", name: "標準スタジオ 1", outputUrl: builtInStorageUrl("defaults/studio/bg3.png", "/bg3.png"), builtIn: true, favorite: false },
-  { id: "bg2", name: "標準スタジオ 2", outputUrl: builtInStorageUrl("defaults/studio/bg7.png", "/bg7.png"), builtIn: true, favorite: false },
-  { id: "bg3", name: "標準スタジオ 3", outputUrl: builtInStorageUrl("defaults/studio/bg1.png", "/bg1.png"), builtIn: true, favorite: false },
-  { id: "bg4", name: "標準スタジオ 4", outputUrl: builtInStorageUrl("defaults/studio/bg4.png", "/bg4.png"), builtIn: true, favorite: false },
-  { id: "bg5", name: "標準スタジオ 5", outputUrl: builtInStorageUrl("defaults/studio/bg5.png", "/bg5.png"), builtIn: true, favorite: false },
-  { id: "bg6", name: "標準スタジオ 6", outputUrl: builtInStorageUrl("defaults/studio/bg6.png", "/bg6.png"), builtIn: true, favorite: false },
-  { id: "bg7", name: "標準スタジオ 7", outputUrl: builtInStorageUrl("defaults/studio/bg2.png", "/bg2.png"), builtIn: true, favorite: false },
-  { id: "bg8", name: "標準スタジオ 8", outputUrl: builtInStorageUrl("defaults/studio/bg8.png", "/bg8.png"), builtIn: true, favorite: false },
-  { id: "bg9", name: "標準スタジオ 9", outputUrl: builtInStorageUrl("defaults/studio/bg9.png", "/bg9.png"), builtIn: true, favorite: false },
-  { id: "bg10", name: "標準スタジオ 10", outputUrl: builtInStorageUrl("defaults/studio/bg10.png", "/bg10.png"), builtIn: true, favorite: false },
+  { id: "bg1", name: "標準スタジオ 1", outputUrl: builtInStorageUrl("defaults/studio/bg3.png", "/bg3.png"), previewUrl: builtInPreviewUrl("bg3.png"), builtIn: true, favorite: false },
+  { id: "bg2", name: "標準スタジオ 2", outputUrl: builtInStorageUrl("defaults/studio/bg7.png", "/bg7.png"), previewUrl: builtInPreviewUrl("bg7.png"), builtIn: true, favorite: false },
+  { id: "bg3", name: "標準スタジオ 3", outputUrl: builtInStorageUrl("defaults/studio/bg1.png", "/bg1.png"), previewUrl: builtInPreviewUrl("bg1.png"), builtIn: true, favorite: false },
+  { id: "bg4", name: "標準スタジオ 4", outputUrl: builtInStorageUrl("defaults/studio/bg4.png", "/bg4.png"), previewUrl: builtInPreviewUrl("bg4.png"), builtIn: true, favorite: false },
+  { id: "bg5", name: "標準スタジオ 5", outputUrl: builtInStorageUrl("defaults/studio/bg5.png", "/bg5.png"), previewUrl: builtInPreviewUrl("bg5.png"), builtIn: true, favorite: false },
+  { id: "bg6", name: "標準スタジオ 6", outputUrl: builtInStorageUrl("defaults/studio/bg6.png", "/bg6.png"), previewUrl: builtInPreviewUrl("bg6.png"), builtIn: true, favorite: false },
+  { id: "bg7", name: "標準スタジオ 7", outputUrl: builtInStorageUrl("defaults/studio/bg2.png", "/bg2.png"), previewUrl: builtInPreviewUrl("bg2.png"), builtIn: true, favorite: false },
+  { id: "bg8", name: "標準スタジオ 8", outputUrl: builtInStorageUrl("defaults/studio/bg8.png", "/bg8.png"), previewUrl: builtInPreviewUrl("bg8.png"), builtIn: true, favorite: false },
+  { id: "bg9", name: "標準スタジオ 9", outputUrl: builtInStorageUrl("defaults/studio/bg9.png", "/bg9.png"), previewUrl: builtInPreviewUrl("bg9.png"), builtIn: true, favorite: false },
+  { id: "bg10", name: "標準スタジオ 10", outputUrl: builtInStorageUrl("defaults/studio/bg10.png", "/bg10.png"), previewUrl: builtInPreviewUrl("bg10.png"), builtIn: true, favorite: false },
 ];
 const DEMO_ALLOWED_BACKGROUND_IDS = new Set(["bg1", "bg2"]);
 const DEMO_ALLOWED_SOLID_COLOR_IDS = new Set(["white", "cream"]);
@@ -601,18 +607,18 @@ const DEMO_SAMPLE_CAPTIONS = {
   demo_sample_4: "服の背面をアップロードすればトルソーやモデルの背中向きの画像も生成できます。",
 };
 const DEFAULT_MODEL_ASSETS = [
-  { id: "mdl_m01", name: "標準モデル 1", outputUrl: builtInStorageUrl("defaults/models/m1.png", "/m1.png"), builtIn: true, favorite: false },
-  { id: "mdl_m02", name: "標準モデル 2", outputUrl: builtInStorageUrl("defaults/models/m2.png", "/m2.png"), builtIn: true, favorite: false },
-  { id: "mdl_m03", name: "標準モデル 3", outputUrl: builtInStorageUrl("defaults/models/m3.png", "/m3.png"), builtIn: true, favorite: false },
-  { id: "mdl_m04", name: "標準モデル 4", outputUrl: builtInStorageUrl("defaults/models/m4.png", "/m4.png"), builtIn: true, favorite: false },
-  { id: "mdl_m05", name: "標準モデル 5", outputUrl: builtInStorageUrl("defaults/models/m5.png", "/m5.png"), builtIn: true, favorite: false },
-  { id: "mdl_m06", name: "標準モデル 6", outputUrl: builtInStorageUrl("defaults/models/m6.png", "/m6.png"), builtIn: true, favorite: false },
-  { id: "mdl_m07", name: "標準モデル 7", outputUrl: builtInStorageUrl("defaults/models/m7.png", "/m7.png"), builtIn: true, favorite: false },
-  { id: "mdl_m08", name: "標準モデル 8", outputUrl: builtInStorageUrl("defaults/models/m8.png", "/m8.png"), builtIn: true, favorite: false },
-  { id: "mdl_m09", name: "標準モデル 9", outputUrl: builtInStorageUrl("defaults/models/m9.png", "/m9.png"), builtIn: true, favorite: false },
-  { id: "mdl_m10", name: "標準モデル 10", outputUrl: builtInStorageUrl("defaults/models/m10.png", "/m10.png"), builtIn: true, favorite: false },
-  { id: "mdl_m11", name: "標準モデル 11", outputUrl: builtInStorageUrl("defaults/models/m11.png", "/m11.png"), builtIn: true, favorite: false },
-  { id: "mdl_m12", name: "標準モデル 12", outputUrl: builtInStorageUrl("defaults/models/m12.png", "/m12.png"), builtIn: true, favorite: false },
+  { id: "mdl_m01", name: "標準モデル 1", outputUrl: builtInStorageUrl("defaults/models/m1.png", "/m1.png"), previewUrl: builtInPreviewUrl("m1.png"), builtIn: true, favorite: false },
+  { id: "mdl_m02", name: "標準モデル 2", outputUrl: builtInStorageUrl("defaults/models/m2.png", "/m2.png"), previewUrl: builtInPreviewUrl("m2.png"), builtIn: true, favorite: false },
+  { id: "mdl_m03", name: "標準モデル 3", outputUrl: builtInStorageUrl("defaults/models/m3.png", "/m3.png"), previewUrl: builtInPreviewUrl("m3.png"), builtIn: true, favorite: false },
+  { id: "mdl_m04", name: "標準モデル 4", outputUrl: builtInStorageUrl("defaults/models/m4.png", "/m4.png"), previewUrl: builtInPreviewUrl("m4.png"), builtIn: true, favorite: false },
+  { id: "mdl_m05", name: "標準モデル 5", outputUrl: builtInStorageUrl("defaults/models/m5.png", "/m5.png"), previewUrl: builtInPreviewUrl("m5.png"), builtIn: true, favorite: false },
+  { id: "mdl_m06", name: "標準モデル 6", outputUrl: builtInStorageUrl("defaults/models/m6.png", "/m6.png"), previewUrl: builtInPreviewUrl("m6.png"), builtIn: true, favorite: false },
+  { id: "mdl_m07", name: "標準モデル 7", outputUrl: builtInStorageUrl("defaults/models/m7.png", "/m7.png"), previewUrl: builtInPreviewUrl("m7.png"), builtIn: true, favorite: false },
+  { id: "mdl_m08", name: "標準モデル 8", outputUrl: builtInStorageUrl("defaults/models/m8.png", "/m8.png"), previewUrl: builtInPreviewUrl("m8.png"), builtIn: true, favorite: false },
+  { id: "mdl_m09", name: "標準モデル 9", outputUrl: builtInStorageUrl("defaults/models/m9.png", "/m9.png"), previewUrl: builtInPreviewUrl("m9.png"), builtIn: true, favorite: false },
+  { id: "mdl_m10", name: "標準モデル 10", outputUrl: builtInStorageUrl("defaults/models/m10.png", "/m10.png"), previewUrl: builtInPreviewUrl("m10.png"), builtIn: true, favorite: false },
+  { id: "mdl_m11", name: "標準モデル 11", outputUrl: builtInStorageUrl("defaults/models/m11.png", "/m11.png"), previewUrl: builtInPreviewUrl("m11.png"), builtIn: true, favorite: false },
+  { id: "mdl_m12", name: "標準モデル 12", outputUrl: builtInStorageUrl("defaults/models/m12.png", "/m12.png"), previewUrl: builtInPreviewUrl("m12.png"), builtIn: true, favorite: false },
 ];
 const DEFAULT_MODEL_ORDER_MAP = new Map(DEFAULT_MODEL_ASSETS.map((asset, index) => [asset.id, index]));
 const DEMO_ALLOWED_MODEL_IDS = new Set(["mdl_m01", "mdl_m02"]);
@@ -2616,7 +2622,7 @@ function UploadPage({ user, jobs, onDataRefresh, onJobCreated, studioAssets = []
                           >
                             <div style={{ aspectRatio: "3/4", background: C.borderLight }}>
                               <img
-                                src={asset.outputUrl || asset.dataUrl || ""}
+                                src={getAssetThumbnailUrl(asset)}
                                 alt={asset.name}
                                 style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
                               />
@@ -3146,7 +3152,7 @@ function UploadPage({ user, jobs, onDataRefresh, onJobCreated, studioAssets = []
                             >
                               <div style={{ aspectRatio: "3/4", background: C.borderLight }}>
                                 <img
-                                  src={asset.outputUrl || asset.dataUrl || ""}
+                                  src={getAssetThumbnailUrl(asset)}
                                   alt={asset.name}
                                   style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
                                 />
@@ -6287,7 +6293,7 @@ function AssetLibraryPage({
                 style={{ aspectRatio: "3/4", background: C.bg, border: "none", padding: 0, width: "100%", display: "block", cursor: "default", position: "relative" }}
               >
                 <img
-                  src={asset.outputUrl || asset.dataUrl || ""}
+                  src={getAssetThumbnailUrl(asset)}
                   alt={asset.name}
                   style={{
                     width: "100%",
@@ -6933,7 +6939,7 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
                 }}
                 style={{ aspectRatio: "3/4", background: C.bg, border: "none", padding: 0, width: "100%", display: "block", cursor: "pointer", position: "relative" }}
               >
-                <img src={asset.outputUrl || asset.dataUrl || ""} alt={asset.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                <img src={getAssetThumbnailUrl(asset)} alt={asset.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
                 {selectionMode && (
                   <span
                     style={{
@@ -7986,7 +7992,7 @@ function ModelsLibraryPage({ user, assets, setAssets, isMobile = false }) {
                   </div>
                 ) : (
                   <img
-                    src={asset.outputUrl || asset.dataUrl || ""}
+                    src={getAssetThumbnailUrl(asset)}
                     alt={asset.name}
                     style={{
                       width: "100%",
