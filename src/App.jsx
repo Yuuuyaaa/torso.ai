@@ -154,7 +154,7 @@ const NAV_ITEMS = [
 
 function Sidebar({ page, setPage, user, onLogout, onSignup, onOpenCreditHistory, isMobile = false }) {
   const [mobileMoreOpen, setMobileMoreOpen] = useState(false);
-  const lowerNavOrder = ["studio", "pricing", "guide", "settings"];
+  const lowerNavOrder = ["pricing", "guide", "settings"];
   const topNavItemsBase = NAV_ITEMS.filter((item) => !lowerNavOrder.includes(item.id));
   const lowerNavItemsBase = lowerNavOrder
     .map((id) => NAV_ITEMS.find((item) => item.id === id))
