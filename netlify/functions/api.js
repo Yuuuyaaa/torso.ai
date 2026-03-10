@@ -131,6 +131,7 @@ async function storageUpload(path, buffer, contentType) {
       apikey: SUPABASE_SERVICE_ROLE_KEY,
       Authorization: `Bearer ${SUPABASE_SERVICE_ROLE_KEY}`,
       "Content-Type": contentType,
+      "cache-control": "public, max-age=31536000, immutable",
       "x-upsert": "true",
     },
     body: buffer,
