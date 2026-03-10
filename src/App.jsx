@@ -4142,6 +4142,8 @@ function HistoryPage({ user, jobs, onRefresh, isMobile = false }) {
   }, []);
 
   const closeViewer = useCallback(() => {
+    setSavePickerOpen(false);
+    setConfirmDeleteOpen(false);
     setViewer({ open: false, items: [], index: 0, title: "" });
   }, []);
 
@@ -4211,15 +4213,6 @@ function HistoryPage({ user, jobs, onRefresh, isMobile = false }) {
     document.body.removeChild(anchor);
   }, []);
   const currentViewerItem = viewer.items[viewer.index] || null;
-  const isCurrentViewerSelected = !!currentViewerItem && selectedImageIds.includes(currentViewerItem.id);
-  const toggleViewerSelection = useCallback(() => {
-    const item = viewer.items[viewer.index];
-    if (!item?.id) return;
-    setSelectionMode(true);
-    setSelectedImageIds((prev) => (
-      prev.includes(item.id) ? prev.filter((id) => id !== item.id) : [...prev, item.id]
-    ));
-  }, [viewer.items, viewer.index]);
 
   const toggleSelectImage = useCallback((imageId) => {
     setSelectedImageIds((prev) => (
@@ -4340,6 +4333,21 @@ function HistoryPage({ user, jobs, onRefresh, isMobile = false }) {
       setDeleting(false);
     }
   }, [user?.id, selectedImageIds, deleting, onRefresh]);
+  const deleteCurrentViewerItem = useCallback(async () => {
+    if (!user?.id || !currentViewerItem?.id || deleting) return;
+    setSaveError("");
+    setDeleting(true);
+    try {
+      await deleteGeneratedItems(user.id, [currentViewerItem.id]);
+      setConfirmDeleteOpen(false);
+      closeViewer();
+      await onRefresh?.();
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : "削除に失敗しました");
+    } finally {
+      setDeleting(false);
+    }
+  }, [closeViewer, currentViewerItem?.id, deleting, onRefresh, user?.id]);
 
   useEffect(() => {
     if (!savePickerOpen) return undefined;
@@ -4875,20 +4883,119 @@ function HistoryPage({ user, jobs, onRefresh, isMobile = false }) {
                 <p style={{ fontSize: 12, color: C.textMid }}>
                   {viewer.index + 1}/{viewer.items.length}
                 </p>
+                {currentViewerItem?.outputUrl && (
+                  <div ref={savePickerRef} style={{ position: "relative" }}>
+                    <Btn
+                      size="sm"
+                      variant="secondary"
+                      onClick={() => setSavePickerOpen((prev) => !prev)}
+                      disabled={saving}
+                    >
+                      {saving ? "保存中..." : "保存"}
+                    </Btn>
+                    {savePickerOpen && (
+                      <div style={{
+                        position: "absolute",
+                        top: "calc(100% + 8px)",
+                        right: 0,
+                        width: 220,
+                        border: `1px solid ${C.border}`,
+                        background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(244,240,234,0.98))",
+                        boxShadow: "0 18px 40px rgba(50,38,22,0.16)",
+                        padding: 8,
+                        zIndex: 20,
+                      }}>
+                        <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: C.textSub, marginBottom: 8 }}>
+                          Save Format
+                        </p>
+                        <div style={{ display: "grid", gap: 6 }}>
+                          {[
+                            { id: "png", label: "PNGで保存" },
+                            { id: "jpg", label: "JPGで保存" },
+                          ].map((opt) => (
+                            <button
+                              key={opt.id}
+                              onClick={() => {
+                                setSaveFormat(opt.id);
+                                setSavePickerOpen(false);
+                                void saveTargets([currentViewerItem], opt.id);
+                              }}
+                              style={{
+                                border: `1px solid ${saveFormat === opt.id ? C.goldBorder : C.borderLight}`,
+                                background: saveFormat === opt.id ? "linear-gradient(135deg, rgba(226,198,145,0.34), rgba(248,246,241,0.98))" : C.surface,
+                                color: C.text,
+                                fontSize: 12,
+                                padding: "10px 12px",
+                                textAlign: "left",
+                                cursor: "pointer",
+                              }}
+                            >
+                              {opt.label}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
                 {currentViewerItem?.id && (
-                  <button
-                    onClick={toggleViewerSelection}
-                    style={{
-                      border: `1px solid ${isCurrentViewerSelected ? C.goldBorder : C.border}`,
-                      background: isCurrentViewerSelected ? C.goldLight : C.surface,
-                      color: C.text,
-                      fontSize: 11,
-                      padding: "6px 10px",
-                      cursor: "pointer",
-                    }}
-                  >
-                    {isCurrentViewerSelected ? "選択解除" : "選択する"}
-                  </button>
+                  <div ref={deleteConfirmRef} style={{ position: "relative" }}>
+                    <Btn size="sm" variant="ghost" onClick={() => setConfirmDeleteOpen(true)} disabled={deleting}>
+                      {deleting ? "削除中..." : "削除"}
+                    </Btn>
+                    {confirmDeleteOpen && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: "calc(100% + 8px)",
+                          right: 0,
+                          width: 300,
+                          background: C.surface,
+                          border: `1px solid ${C.border}`,
+                          boxShadow: "0 10px 24px rgba(0,0,0,0.12)",
+                          padding: 12,
+                          zIndex: 25,
+                        }}
+                      >
+                        <p style={{ fontSize: 12, color: C.text, marginBottom: 6 }}>
+                          この画像を削除しますか？
+                        </p>
+                        <p style={{ fontSize: 11, color: C.textSub, lineHeight: 1.6, marginBottom: 10 }}>
+                          生成時に消費したクレジットは戻りません。
+                        </p>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                          <button
+                            onClick={() => setConfirmDeleteOpen(false)}
+                            disabled={deleting}
+                            style={{
+                              border: `1px solid ${C.border}`,
+                              background: C.bg,
+                              color: C.textSub,
+                              fontSize: 12,
+                              padding: "8px 10px",
+                              cursor: deleting ? "not-allowed" : "pointer",
+                            }}
+                          >
+                            キャンセル
+                          </button>
+                          <button
+                            onClick={() => { void deleteCurrentViewerItem(); }}
+                            disabled={deleting}
+                            style={{
+                              border: `1px solid ${C.red}`,
+                              background: C.red,
+                              color: C.surface,
+                              fontSize: 12,
+                              padding: "8px 10px",
+                              cursor: deleting ? "not-allowed" : "pointer",
+                            }}
+                          >
+                            {deleting ? "削除中..." : "削除する"}
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 )}
                 <button onClick={closeViewer} style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 20, color: C.textMid }}>×</button>
               </div>
@@ -4934,7 +5041,7 @@ function HistoryPage({ user, jobs, onRefresh, isMobile = false }) {
                       width: renderedImageSize ? `${renderedImageSize.width}px` : "100%",
                       height: renderedImageSize ? `${renderedImageSize.height}px` : "100%",
                       objectFit: "contain",
-                      border: `2px solid ${isCurrentViewerSelected ? C.goldBorder : "transparent"}`,
+                      border: "2px solid transparent",
                       boxSizing: "border-box",
                       display: "block",
                     }}
