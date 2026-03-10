@@ -8,7 +8,7 @@ const PRIVACY_NOTES = [
   "失敗ジョブは約7日で削除されます。",
 ];
 
-export default function InfoPage({ title, route, onLogin, onSignup }) {
+export default function InfoPage({ title, route, onLogin, onSignup, onTryDemo }) {
   const isPrivacyPage = route === "/privacy";
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: JP, padding: "24px" }}>
@@ -28,6 +28,20 @@ export default function InfoPage({ title, route, onLogin, onSignup }) {
             <Logo />
           </a>
           <div style={{ display: "flex", gap: 8 }}>
+            <button
+              onClick={onTryDemo}
+              style={{
+                border: `1px solid ${C.border}`,
+                background: "transparent",
+                color: C.text,
+                padding: "10px 16px",
+                borderRadius: 999,
+                fontFamily: SANS,
+                cursor: "pointer",
+              }}
+            >
+              デモ
+            </button>
             <button
               onClick={onLogin}
               style={{

@@ -7,6 +7,7 @@ import {
   fetchAssetLibrary,
   editImage,
   generateModelAssets,
+  getCreditPackOffers,
   getCurrentUser,
   listCreditHistory,
   getPlanLabel,
@@ -19,6 +20,7 @@ import {
   retryJob,
   saveAssetLibrary,
   signup,
+  createCheckoutSession,
   startDemoSession,
   updateUserName,
 } from "./lib/mockApi";
@@ -32,6 +34,7 @@ import { C, JP, SANS, SERIF } from "./theme";
 
 const PLAN_MAX_CREDITS = {
   starter: 30,
+  free: 1,
   light: 30,
   growth: 200,
   standard: 200,
@@ -8567,86 +8570,466 @@ function ModelsLibraryPage({ user, assets, setAssets, isMobile = false }) {
 // ─────────────────────────────────────────────
 // PAGE: GUIDE
 // ─────────────────────────────────────────────
-function GuidePage() {
+function GuidePage({ isMobile = false, setPage }) {
   const sections = [
+    { id: "intro", num: "01", title: "はじめに" },
+    { id: "quickstart", num: "02", title: "クイックスタート" },
+    { id: "modes", num: "03", title: "モード別ガイド" },
+    { id: "prompting", num: "04", title: "プロンプトの書き方" },
+    { id: "credits", num: "05", title: "クレジットの仕組み" },
+    { id: "template", num: "06", title: "商品説明文テンプレート" },
+    { id: "faq", num: "07", title: "よくある質問" },
+    { id: "checklist", num: "08", title: "公開前チェック" },
+  ];
+  const inputSpecs = [
+    ["撮影スタイル", "平置き・ハンガー吊り・白背景でのシンプルな商品撮影"],
+    ["背景", "白または単色が推奨。複雑な背景は認識精度が下がる場合があります。"],
+    ["ファイル形式", "JPG / PNG（1枚あたり最大 10MB）"],
+    ["推奨解像度", "長辺 1000px 以上"],
+  ];
+  const quickSteps = [
+    ["商品を登録する", "サイドバーの「商品」から画像を追加します。商品名やカテゴリも入れておくと、後から探しやすくなります。"],
+    ["ルック生成を開く", "「ルック生成」で対象の商品を選びます。最大4点まで組み合わせて使えます。"],
+    ["モードを選ぶ", "トルソー / マネキン / ゴースト / モデルから用途に合う見せ方を選択します。"],
+    ["プロンプトを入力する", "主対象 → 条件 → 背景 → 仕上げ、の順で短く指定すると安定します。"],
+    ["生成して確認する", "まず1枚でテストし、問題なければZIP一括処理で量産するのが効率的です。"],
+  ];
+  const modeCards = [
     {
-      id: "overview",
-      title: "はじめに",
-      body: "TORSO.AIは、平置き・ハンガー画像をアップロードするだけで、トルソー / マネキン / ゴースト / モデル画像を生成できるアパレル向け生成ツールです。まずは1枚で試し、結果が良ければZIP一括処理に進むのがおすすめです。",
+      name: "Torso",
+      label: "トルソー",
+      body: "上半身の立体感を自然に出したいトップス・シャツ・ジャケット向け。",
+      prompt: "上半身トルソーに自然にフィット。柄・ロゴ・色は完全保持。白背景。",
+      input: "平置きまたはハンガー、上半身が分かる画像",
     },
     {
-      id: "prompt-basics",
-      title: "プロンプトの書き方（基本）",
-      body: "短くても伝わる構成は「主対象 → 条件 → 背景 → 仕上げ」です。例: 『女性モデル、20代、日本人、自然体、白背景、EC用、布の柄とロゴは保持』。迷ったら最初は日本語でOKです。",
+      name: "Mannequin",
+      label: "マネキン",
+      body: "全身のバランスや丈感を見せたい商品向け。EC一覧でも使いやすいです。",
+      prompt: "全身マネキンに着用。立ち姿。商品比率を維持。",
+      input: "全体が写る平置き・ハンガー画像",
     },
     {
-      id: "mode-prompts",
-      title: "モード別プロンプト例",
-      body: "トルソー: 『上半身トルソーに自然にフィット。柄・ロゴ・色は完全保持。白背景。』\nマネキン: 『全身マネキンに着せる。立ち姿。商品比率を維持。』\nゴースト: 『ゴーストマネキン。首元と内側構造は自然に。白背景EC用。』\nモデル: 『日本人女性、170cm、細身、自然光風、ECカタログ品質。』",
+      name: "Ghost",
+      label: "ゴースト",
+      body: "インビジブルマネキン仕上げ。胴元や内側の構造を見せたい商品向け。",
+      prompt: "ゴーストマネキン。首元と内側構造は自然に。白背景EC用。",
+      input: "平置き。裏返し画像があると精度向上",
     },
     {
-      id: "product-description",
-      title: "商品説明文テンプレ",
-      body: "生成画像と一緒に使える商品説明テンプレ:\n『◯◯素材を使用した◯◯。シルエットは◯◯で、日常使いからお出かけまで対応。モデル身長◯◯cm / 着用サイズ◯◯。』\nカラー展開やサイズ展開を追記するとCVR改善に効きます。",
-    },
-    {
-      id: "faq",
-      title: "よくある質問",
-      body: "Q. 画像がうまく変換されない\nA. 元画像の服全体が見える構図にし、背景をシンプルにしてください。\n\nQ. ロゴや柄が崩れる\nA. カスタムプロンプトで『ロゴ・柄を完全保持』を明記してください。\n\nQ. どの比率を選ぶべき？\nA. ECモールは4:5または1:1が使いやすいです。",
-    },
-    {
-      id: "quick-check",
-      title: "公開前チェック",
-      body: "1) 服全体が切れていないか\n2) ロゴ/柄が崩れていないか\n3) 影や背景が不自然でないか\n4) 商品説明文のサイズ情報が合っているか\nこの4点を確認してから公開してください。",
+      name: "Model",
+      label: "モデル",
+      body: "SNS・特集・ブランドページ用の着用ビジュアルを作りたいとき向け。",
+      prompt: "日本人女性、170cm、細身、自然光風、ECカタログ品質。",
+      input: "平置き・ハンガーの全体画像",
     },
   ];
+  const promptRows = [
+    ["主対象", "女性モデル、20代、日本人 / 上半身トルソー"],
+    ["条件", "細身、自然な立ち姿、柄・ロゴ保持"],
+    ["背景", "白背景、自然光、スタジオ"],
+    ["仕上げ", "ECカタログ品質、高解像度、布の質感を保持"],
+  ];
+  const creditRows = [
+    ["1枚生成（単体）", "1 クレジット"],
+    ["ZIP一括処理", "枚数 × 1 クレジット"],
+    ["生成失敗（エラー）", "消費なし"],
+  ];
+  const faqs = [
+    ["生成に失敗した場合、クレジットは消費されますか？", "いいえ。エラーで生成が完了しなかった場合は消費されません。"],
+    ["商品のロゴやプリントは保持されますか？", "プロンプトに「柄・ロゴ・色は完全保持」と明記すると再現精度が上がります。ただし完全再現を保証するものではありません。"],
+    ["ZIP一括処理の上限枚数はありますか？", "1回の一括処理で最大50枚までを想定しています。多い場合は分けて実行してください。"],
+    ["対応していない画像形式はありますか？", "JPGとPNG以外は非対応です。HEICやWEBPは変換してからアップロードしてください。"],
+    ["同じ商品で複数パターンを生成できますか？", "できます。モードやプロンプトを変えて何度でも生成でき、履歴から見返せます。"],
+  ];
+  const checklist = [
+    "商品色・柄が実物に近いか",
+    "縫い目・タグ・首元などに不自然な破綻がないか",
+    "背景が掲載先の用途に合っているか",
+    "解像度が掲載先の推奨サイズを満たしているか",
+    "サイズ感・プロポーションに違和感がないか",
+    "背景や小物に権利上の問題がないか",
+  ];
+  const previewTiles = [
+    { title: "Torso", sub: "白背景で立体感を補完", image: "/optimized/torso.jpg", badge: "EC Basic" },
+    { title: "Mannequin", sub: "丈感と全体バランスを確認", image: "/optimized/mannequin.jpg", badge: "Full Body" },
+    { title: "Ghost", sub: "構造を見せる商品向け", image: "/optimized/ghost.jpg", badge: "Invisible" },
+    { title: "Model", sub: "着用イメージを一気に作る", image: "/optimized/m3.jpg", badge: "Campaign" },
+  ];
+  const workflowCards = [
+    { label: "Input", title: "商品画像を登録", body: "平置き・ハンガー画像を商品ライブラリに追加。背景はシンプルなほど安定します。" },
+    { label: "Generate", title: "モードと条件を指定", body: "用途に応じてトルソー・マネキン・モデルを選択。必要なら柄保持や背景も追記します。" },
+    { label: "Scale", title: "確認後に一括処理", body: "1枚で方向性が合えばZIP処理へ。量産前にプロンプトを固定すると運用がぶれません。" },
+  ];
+
+  const cardStyle = {
+    background: "linear-gradient(180deg, rgba(255,255,255,0.94), rgba(248,245,239,0.98))",
+    border: `1px solid ${C.border}`,
+    boxShadow: "0 16px 36px rgba(39,31,22,0.06)",
+  };
+  const sectionTitle = (num, title) => (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginBottom: 18 }}>
+      <span style={{ fontSize: 11, letterSpacing: "0.12em", color: C.gold, fontFamily: SANS, fontWeight: 600 }}>{num}</span>
+      <h2 style={{ fontFamily: SERIF, fontSize: isMobile ? 28 : 32, fontWeight: 400, color: C.text, lineHeight: 1.1 }}>{title}</h2>
+    </div>
+  );
 
   return (
     <div className="fade-up">
-      <div style={{ marginBottom: 26 }}>
-        <p style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: C.gold, marginBottom: 8, fontFamily: SANS }}>
+      <div
+        style={{
+          ...cardStyle,
+          padding: isMobile ? "24px 18px" : "34px 34px 30px",
+          marginBottom: isMobile ? 18 : 24,
+          position: "relative",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            position: "absolute",
+            inset: "auto -12% -38% auto",
+            width: isMobile ? 220 : 320,
+            height: isMobile ? 220 : 320,
+            borderRadius: "50%",
+            background: "radial-gradient(circle, rgba(184,148,60,0.16) 0%, rgba(184,148,60,0.05) 38%, rgba(184,148,60,0) 72%)",
+            pointerEvents: "none",
+          }}
+        />
+        <p style={{ fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase", color: C.gold, marginBottom: 10, fontFamily: SANS, fontWeight: 600 }}>
           Guide
         </p>
-        <h1 style={{ fontFamily: SERIF, fontSize: 38, fontWeight: 400, marginBottom: 10 }}>使い方</h1>
-        <p style={{ fontSize: 13, color: C.textMid, lineHeight: 1.7 }}>
-          プロンプトの書き方、よくある質問、商品説明のテンプレをまとめています。
+        <h1 style={{ fontFamily: SERIF, fontSize: isMobile ? 38 : 54, fontWeight: 400, color: C.text, lineHeight: 0.98, marginBottom: 14 }}>
+          使い方
+        </h1>
+        <p style={{ maxWidth: 760, fontSize: isMobile ? 13 : 15, color: C.textMid, lineHeight: 1.9, marginBottom: 20 }}>
+          TORSO.AIは、商品の平置き・ハンガー画像からトルソー・マネキン・ゴースト・モデル着用画像を生成するアパレル向けツールです。
+          はじめてのテストから本番運用まで、このページだけで流れを掴めるように整理しています。
         </p>
-      </div>
-
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 240px", gap: 20, alignItems: "start" }}>
-        <div style={{ display: "grid", gap: 14 }}>
-          {sections.map((section) => (
-            <section
-              key={section.id}
-              id={section.id}
-              style={{ background: C.surface, border: `1px solid ${C.border}`, padding: "18px 20px", scrollMarginTop: 24 }}
+        <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 20 }}>
+          <Btn size="sm" onClick={() => setPage?.("upload")}>ルック生成を開く</Btn>
+          <Btn size="sm" variant="ghost" onClick={() => setPage?.("products")}>商品を登録する</Btn>
+        </div>
+        <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+          {["まず1枚で試す", "結果確認後に一括処理", "白背景と商品全体が基本"].map((item) => (
+            <span
+              key={item}
+              style={{
+                fontSize: 11,
+                letterSpacing: "0.06em",
+                color: C.text,
+                background: C.goldLight,
+                border: `1px solid ${C.goldBorder}`,
+                padding: "7px 10px",
+              }}
             >
-              <h2 style={{ fontFamily: SANS, fontSize: 18, color: C.text, fontWeight: 700, marginBottom: 10 }}>
-                {section.title}
-              </h2>
-              <p style={{ fontSize: 13, color: C.textMid, lineHeight: 1.8, whiteSpace: "pre-line" }}>
-                {section.body}
-              </p>
-            </section>
+              {item}
+            </span>
           ))}
         </div>
-
-        <aside style={{ position: "sticky", top: 24, background: C.surface, border: `1px solid ${C.border}`, padding: "14px 14px" }}>
-          <p style={{ fontSize: 10, color: C.textSub, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 10 }}>
-            このページ
-          </p>
-          <div style={{ display: "grid", gap: 8 }}>
-            {sections.map((section) => (
-              <a
-                key={section.id}
-                href={`#${section.id}`}
-                style={{ fontSize: 12, color: C.textMid, textDecoration: "none", lineHeight: 1.4 }}
+        <div style={{ marginTop: 24, display: "grid", gridTemplateColumns: isMobile ? "repeat(2, minmax(0, 1fr))" : "1.15fr 0.85fr 0.85fr", gridAutoRows: isMobile ? 150 : 180, gap: 12 }}>
+          {previewTiles.map((tile, index) => (
+            <div
+              key={tile.title}
+              style={{
+                position: "relative",
+                overflow: "hidden",
+                border: `1px solid ${C.border}`,
+                background: C.bg,
+                gridRow: !isMobile && index === 0 ? "span 2" : "span 1",
+                minHeight: 0,
+              }}
+            >
+              <img
+                src={tile.image}
+                alt={tile.title}
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                  display: "block",
+                }}
+              />
+              <div
+                style={{
+                  position: "absolute",
+                  inset: 0,
+                  background: "linear-gradient(180deg, rgba(28,25,22,0.02) 0%, rgba(28,25,22,0.18) 42%, rgba(28,25,22,0.72) 100%)",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "flex-end",
+                  padding: 14,
+                }}
               >
-                {section.title}
-              </a>
-            ))}
-          </div>
-        </aside>
+                <span style={{ alignSelf: "flex-start", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: "#fff", border: "1px solid rgba(255,255,255,0.32)", background: "rgba(255,255,255,0.08)", padding: "4px 7px", marginBottom: 10 }}>
+                  {tile.badge}
+                </span>
+                <p style={{ fontFamily: SERIF, fontSize: isMobile ? 22 : 28, color: "#fff", lineHeight: 1, marginBottom: 6 }}>{tile.title}</p>
+                <p style={{ fontSize: 12, color: "rgba(255,255,255,0.82)", lineHeight: 1.6 }}>{tile.sub}</p>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "minmax(0, 1fr) 250px", gap: 20, alignItems: "start" }}>
+        <div style={{ display: "grid", gap: isMobile ? 16 : 18 }}>
+          <section style={{ ...cardStyle, padding: isMobile ? 18 : 24 }}>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+              {workflowCards.map((card) => (
+                <div key={card.label} style={{ background: "linear-gradient(180deg, rgba(245,243,239,0.92), rgba(255,255,255,0.82))", border: `1px solid ${C.border}`, padding: "16px 16px 15px" }}>
+                  <p style={{ fontSize: 10, color: C.gold, letterSpacing: "0.14em", textTransform: "uppercase", marginBottom: 8, fontWeight: 600 }}>{card.label}</p>
+                  <p style={{ fontSize: 15, color: C.text, fontWeight: 600, marginBottom: 7 }}>{card.title}</p>
+                  <p style={{ fontSize: 12, color: C.textMid, lineHeight: 1.8 }}>{card.body}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section id="intro" style={{ ...cardStyle, padding: isMobile ? 18 : 26, scrollMarginTop: 24 }}>
+            {sectionTitle("01", "はじめに")}
+            <p style={{ fontSize: 13, color: C.textMid, lineHeight: 1.9, marginBottom: 18 }}>
+              画像を1枚アップロードし、モードとプロンプトを設定するだけで生成が始まります。まず1枚で品質を確認し、問題なければZIP一括処理に進むのが最も効率的です。
+            </p>
+            <div style={{ overflowX: "auto" }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isMobile ? 520 : 0 }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.textSub, padding: "0 0 10px", borderBottom: `1px solid ${C.border}` }}>条件</th>
+                    <th style={{ textAlign: "left", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.textSub, padding: "0 0 10px", borderBottom: `1px solid ${C.border}` }}>詳細</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {inputSpecs.map(([label, value]) => (
+                    <tr key={label}>
+                      <td style={{ padding: "12px 12px 12px 0", borderBottom: `1px solid ${C.borderLight}`, fontSize: 13, color: C.text, fontWeight: 500, verticalAlign: "top" }}>{label}</td>
+                      <td style={{ padding: "12px 0", borderBottom: `1px solid ${C.borderLight}`, fontSize: 13, color: C.textMid, lineHeight: 1.8 }}>{value}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ marginTop: 18, background: C.goldLight, borderLeft: `2px solid ${C.gold}`, padding: "14px 16px" }}>
+              <p style={{ fontSize: 12, color: C.textMid, lineHeight: 1.8 }}>
+                <span style={{ color: C.text, fontWeight: 600 }}>注意:</span> 商品が小さく写っている場合や背景が複雑な場合は生成品質が下がります。できるだけ商品を大きく、背景を整理した画像を使ってください。
+              </p>
+            </div>
+            <div style={{ marginTop: 14, display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(3, minmax(0, 1fr))", gap: 10 }}>
+              {[
+                ["おすすめ", "白背景 / 商品全体 / シワや柄が見える画像"],
+                ["避けたい", "背景が散らかっている / 商品が遠い / 影が強すぎる"],
+                ["運用上のコツ", "商品ごとにプロンプトを固定しておくと、量産時の品質差が減ります。"],
+              ].map(([title, body]) => (
+                <div key={title} style={{ background: C.surface, border: `1px solid ${C.borderLight}`, padding: "12px 13px" }}>
+                  <p style={{ fontSize: 11, color: C.text, fontWeight: 600, marginBottom: 6 }}>{title}</p>
+                  <p style={{ fontSize: 12, color: C.textMid, lineHeight: 1.75 }}>{body}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section id="quickstart" style={{ ...cardStyle, padding: isMobile ? 18 : 26, scrollMarginTop: 24 }}>
+            {sectionTitle("02", "クイックスタート")}
+            <div style={{ display: "grid", gap: 0 }}>
+              {quickSteps.map(([title, body], index) => (
+                <div
+                  key={title}
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "48px minmax(0, 1fr)",
+                    gap: 14,
+                    padding: "16px 0",
+                    borderBottom: index === quickSteps.length - 1 ? "none" : `1px solid ${C.borderLight}`,
+                  }}
+                >
+                  <div style={{ fontSize: 11, color: C.gold, letterSpacing: "0.12em", fontFamily: SANS, fontWeight: 600, paddingTop: 3 }}>
+                    {String(index + 1).padStart(2, "0")}
+                  </div>
+                  <div>
+                    <h3 style={{ fontSize: 15, color: C.text, marginBottom: 6, fontWeight: 600 }}>{title}</h3>
+                    <p style={{ fontSize: 13, color: C.textMid, lineHeight: 1.85 }}>{body}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section id="modes" style={{ ...cardStyle, padding: isMobile ? 18 : 26, scrollMarginTop: 24 }}>
+            {sectionTitle("03", "モード別ガイド")}
+            <p style={{ fontSize: 13, color: C.textMid, lineHeight: 1.8, marginBottom: 18 }}>
+              用途と商品カテゴリに合わせてモードを選んでください。細かい柄やロゴがある商品は、プロンプト側でも保持条件を明記した方が安定します。
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(2, minmax(0, 1fr))", gap: 12 }}>
+              {modeCards.map((mode) => (
+                <article key={mode.name} style={{ background: "rgba(245,243,239,0.92)", border: `1px solid ${C.border}`, padding: "18px 18px 16px" }}>
+                  <p style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: C.gold, marginBottom: 6, fontFamily: SANS, fontWeight: 600 }}>
+                    {mode.name}
+                  </p>
+                  <h3 style={{ fontFamily: SERIF, fontSize: 26, fontWeight: 400, color: C.text, marginBottom: 10 }}>{mode.label}</h3>
+                  <p style={{ fontSize: 13, color: C.textMid, lineHeight: 1.8, marginBottom: 14 }}>{mode.body}</p>
+                  <div style={{ background: C.surface, border: `1px solid ${C.borderLight}`, padding: "10px 12px", marginBottom: 10 }}>
+                    <p style={{ fontSize: 11, color: C.textSub, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 5 }}>Prompt</p>
+                    <p style={{ fontSize: 12, color: C.text, lineHeight: 1.7 }}>{mode.prompt}</p>
+                  </div>
+                  <p style={{ fontSize: 12, color: C.textMid, lineHeight: 1.7 }}>
+                    <span style={{ color: C.textSub }}>推奨入力:</span> {mode.input}
+                  </p>
+                </article>
+              ))}
+            </div>
+            <div style={{ marginTop: 14, background: "linear-gradient(135deg, rgba(226,198,145,0.18), rgba(255,255,255,0.8))", border: `1px solid ${C.goldBorder}`, padding: "12px 14px" }}>
+              <p style={{ fontSize: 12, color: C.textMid, lineHeight: 1.8 }}>
+                最初の運用では、<span style={{ color: C.text, fontWeight: 600 }}>EC商品詳細はトルソー or マネキン、SNSや特集はモデル</span> と役割を分けると迷いません。
+              </p>
+            </div>
+          </section>
+
+          <section id="prompting" style={{ ...cardStyle, padding: isMobile ? 18 : 26, scrollMarginTop: 24 }}>
+            {sectionTitle("04", "プロンプトの書き方")}
+            <p style={{ fontSize: 13, color: C.textMid, lineHeight: 1.9, marginBottom: 18 }}>
+              迷ったら <span style={{ color: C.text, fontWeight: 600 }}>主対象 → 条件 → 背景 → 仕上げ</span> の順で並べてください。短くても要点が揃っていれば十分伝わります。
+            </p>
+            <div style={{ overflowX: "auto", marginBottom: 16 }}>
+              <table style={{ width: "100%", borderCollapse: "collapse", minWidth: isMobile ? 520 : 0 }}>
+                <thead>
+                  <tr>
+                    <th style={{ textAlign: "left", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.textSub, padding: "0 0 10px", borderBottom: `1px solid ${C.border}` }}>要素</th>
+                    <th style={{ textAlign: "left", fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.textSub, padding: "0 0 10px", borderBottom: `1px solid ${C.border}` }}>例</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {promptRows.map(([label, value]) => (
+                    <tr key={label}>
+                      <td style={{ padding: "12px 12px 12px 0", borderBottom: `1px solid ${C.borderLight}`, fontSize: 13, color: C.text, fontWeight: 500, verticalAlign: "top" }}>{label}</td>
+                      <td style={{ padding: "12px 0", borderBottom: `1px solid ${C.borderLight}`, fontSize: 13, color: C.textMid, lineHeight: 1.8 }}>{value}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div style={{ display: "grid", gap: 10 }}>
+              {[
+                "女性モデル、20代、日本人、自然な立ち姿、白背景、ECカタログ品質。布の柄とロゴは保持。",
+                "上半身トルソー、自然フィット、白背景。プリント・カラーは完全保持。高解像度。",
+              ].map((example) => (
+                <div key={example} style={{ background: "rgba(245,243,239,0.95)", border: `1px solid ${C.border}`, padding: "14px 16px", fontSize: 12, color: C.text, lineHeight: 1.9 }}>
+                  {example}
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section id="credits" style={{ ...cardStyle, padding: isMobile ? 18 : 26, scrollMarginTop: 24 }}>
+            {sectionTitle("05", "クレジットの仕組み")}
+            <p style={{ fontSize: 13, color: C.textMid, lineHeight: 1.8, marginBottom: 18 }}>
+              生成はクレジットを消費します。基本は1枚につき1クレジットで、失敗時は消費されません。
+            </p>
+            <div style={{ display: "grid", gridTemplateColumns: isMobile ? "minmax(0, 1fr)" : "repeat(3, minmax(0, 1fr))", gap: 12 }}>
+              {creditRows.map(([label, value]) => (
+                <div key={label} style={{ background: "rgba(245,243,239,0.92)", border: `1px solid ${C.border}`, padding: "16px 16px 14px" }}>
+                  <p style={{ fontSize: 12, color: C.text, fontWeight: 600, marginBottom: 8 }}>{label}</p>
+                  <p style={{ fontFamily: SERIF, fontSize: 26, color: C.text, lineHeight: 1 }}>{value}</p>
+                </div>
+              ))}
+            </div>
+            <div style={{ marginTop: 16, background: C.surface, border: `1px solid ${C.borderLight}`, padding: "12px 14px" }}>
+              <p style={{ fontSize: 12, color: C.textMid, lineHeight: 1.8 }}>
+                残クレジットはサイドバー下部から確認できます。上限に達した場合はプラン変更または追加購入を使う前提で設計されています。
+              </p>
+            </div>
+            <div style={{ marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <Btn size="sm" variant="ghost" onClick={() => setPage?.("pricing")}>プランを見る</Btn>
+              <Btn size="sm" variant="ghost" onClick={() => setPage?.("history")}>生成履歴を見る</Btn>
+            </div>
+          </section>
+
+          <section id="template" style={{ ...cardStyle, padding: isMobile ? 18 : 26, scrollMarginTop: 24 }}>
+            {sectionTitle("06", "商品説明文テンプレート")}
+            <p style={{ fontSize: 13, color: C.textMid, lineHeight: 1.8, marginBottom: 14 }}>
+              生成画像と合わせてEC掲載に流用しやすい、最小限のテンプレートです。
+            </p>
+            <div style={{ background: "rgba(245,243,239,0.95)", border: `1px solid ${C.border}`, padding: isMobile ? "16px 14px" : "20px 22px", fontSize: 12, color: C.text, lineHeight: 2 }}>
+              『◯◯素材を使用した◯◯。シルエットは◯◯で、日常使いからお出かけまで対応。モデル身長◯◯cm / 着用サイズ◯◯。』
+            </div>
+            <p style={{ fontSize: 12, color: C.textSub, lineHeight: 1.8, marginTop: 12 }}>
+              素材・シルエット・着用サイズを埋めるだけで使えます。モデルモードの画像と組み合わせると情報の整合性が取りやすくなります。
+            </p>
+          </section>
+
+          <section id="faq" style={{ ...cardStyle, padding: isMobile ? 18 : 26, scrollMarginTop: 24 }}>
+            {sectionTitle("07", "よくある質問")}
+            <div style={{ display: "grid", gap: 0 }}>
+              {faqs.map(([question, answer], index) => (
+                <div key={question} style={{ padding: "16px 0", borderBottom: index === faqs.length - 1 ? "none" : `1px solid ${C.borderLight}` }}>
+                  <p style={{ fontSize: 14, color: C.text, fontWeight: 600, marginBottom: 7 }}>{question}</p>
+                  <p style={{ fontSize: 13, color: C.textMid, lineHeight: 1.85 }}>{answer}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section id="checklist" style={{ ...cardStyle, padding: isMobile ? 18 : 26, scrollMarginTop: 24 }}>
+            {sectionTitle("08", "公開前チェック")}
+            <p style={{ fontSize: 13, color: C.textMid, lineHeight: 1.8, marginBottom: 14 }}>
+              EC掲載やカタログ入稿の前に、最低限ここだけは確認してください。
+            </p>
+            <div style={{ display: "grid", gap: 8 }}>
+              {checklist.map((item) => (
+                <div key={item} style={{ display: "grid", gridTemplateColumns: "18px minmax(0, 1fr)", gap: 10, alignItems: "start", padding: "10px 0", borderBottom: `1px solid ${C.borderLight}` }}>
+                  <span style={{ color: C.gold, fontSize: 12, paddingTop: 2 }}>○</span>
+                  <p style={{ fontSize: 13, color: C.textMid, lineHeight: 1.8 }}>{item}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section style={{ ...cardStyle, padding: isMobile ? 20 : 28, background: "linear-gradient(160deg, #1f1b17 0%, #2a241d 55%, #3a3228 100%)", borderColor: "#322b23" }}>
+            <p style={{ fontSize: 10, letterSpacing: "0.18em", textTransform: "uppercase", color: "rgba(245,237,216,0.78)", marginBottom: 10, fontWeight: 600 }}>
+              Get Started
+            </p>
+            <h2 style={{ fontFamily: SERIF, fontSize: isMobile ? 30 : 38, fontWeight: 400, color: "#fff8ee", lineHeight: 1.12, marginBottom: 10 }}>
+              最初の1枚を作って、
+              <br />
+              運用の型を固める。
+            </h2>
+            <p style={{ fontSize: 13, color: "rgba(255,248,238,0.72)", lineHeight: 1.9, maxWidth: 720, marginBottom: 16 }}>
+              使い方ページは読むだけだと弱いので、すぐ試せる導線を最後に置いています。商品登録から始めるか、そのままルック生成へ進めます。
+            </p>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              <Btn size="sm" onClick={() => setPage?.("products")}>商品を登録</Btn>
+              <Btn size="sm" variant="secondary" onClick={() => setPage?.("upload")}>ルック生成へ</Btn>
+            </div>
+          </section>
+        </div>
+
+        {!isMobile && (
+          <aside style={{ position: "sticky", top: 24 }}>
+            <div style={{ ...cardStyle, padding: "16px 16px 14px" }}>
+              <p style={{ fontSize: 10, color: C.textSub, letterSpacing: "0.12em", textTransform: "uppercase", marginBottom: 12 }}>
+                このページ
+              </p>
+              <div style={{ display: "grid", gap: 8 }}>
+                {sections.map((section) => (
+                  <a
+                    key={section.id}
+                    href={`#${section.id}`}
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "28px minmax(0, 1fr)",
+                      gap: 8,
+                      textDecoration: "none",
+                      padding: "8px 0",
+                      borderBottom: `1px solid ${C.borderLight}`,
+                    }}
+                  >
+                    <span style={{ fontSize: 10, color: C.gold, letterSpacing: "0.12em", fontWeight: 600 }}>{section.num}</span>
+                    <span style={{ fontSize: 12, color: C.textMid, lineHeight: 1.45 }}>{section.title}</span>
+                  </a>
+                ))}
+              </div>
+            </div>
+          </aside>
+        )}
       </div>
     </div>
   );
@@ -8758,9 +9141,19 @@ const PLANS = [
   },
 ];
 
-function PricingPage() {
+function PricingPage({ user }) {
   const [billingCycle, setBillingCycle] = useState("monthly");
   const formatYen = useCallback((value) => `¥${Number(value || 0).toLocaleString("ja-JP")}`, []);
+  const [checkoutBusy, setCheckoutBusy] = useState("");
+  const [checkoutError, setCheckoutError] = useState("");
+  const topupRows = [
+    { planId: "free", label: "Free 初回限定", note: "最初の1回のみ", offer: getCreditPackOffers("free", true)[0] },
+    { planId: "free-repeat", label: "Free 通常追加", note: "2回目以降", offer: getCreditPackOffers("free", false)[0] },
+    { planId: "starter", label: "Starter", note: "加入中のみ", offer: getCreditPackOffers("starter")[0] },
+    { planId: "growth", label: "Growth", note: "加入中のみ", offer: getCreditPackOffers("growth")[0] },
+    { planId: "business", label: "Business", note: "加入中のみ", offer: getCreditPackOffers("business")[0] },
+    { planId: "enterprise", label: "Enterprise", note: "加入中のみ", offer: getCreditPackOffers("enterprise")[0] },
+  ];
 
   return (
     <div className="fade-up">
@@ -8901,6 +9294,11 @@ function PricingPage() {
             <div style={{ padding: "12px 0", borderTop: `1px solid ${C.borderLight}`, borderBottom: `1px solid ${C.borderLight}`, marginBottom: 24 }}>
               <p style={{ fontSize: 11, color: C.textSub, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 4 }}>クレジット</p>
               <p style={{ fontFamily: JP, fontSize: 26, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums" }}>{plan.credits}<span style={{ fontSize: 12, fontFamily: SANS, color: C.textSub, fontWeight: 300 }}> / 月</span></p>
+              {getCreditPackOffers(plan.id)[0] ? (
+                <p style={{ fontSize: 11, color: C.textSub, marginTop: 6 }}>
+                  追加 10cr {formatYen(getCreditPackOffers(plan.id)[0].priceYen)}
+                </p>
+              ) : null}
             </div>
 
             <div style={{ marginBottom: 24 }}>
@@ -8912,11 +9310,59 @@ function PricingPage() {
               ))}
             </div>
 
-            <Btn variant={plan.id === "growth" ? "gold" : plan.id === "enterprise" ? "primary" : "secondary"} full>
-              {plan.cta}
+            <Btn
+              variant={plan.id === "growth" ? "gold" : plan.id === "enterprise" ? "primary" : "secondary"}
+              full
+              disabled={checkoutBusy === plan.id || user?.plan === plan.id}
+              onClick={async () => {
+                if (!user?.id || user?.plan === plan.id) return;
+                setCheckoutBusy(plan.id);
+                setCheckoutError("");
+                try {
+                  const session = await createCheckoutSession({
+                    userId: user.id,
+                    mode: "subscription",
+                    planId: plan.id,
+                  });
+                  window.location.assign(session.url);
+                } catch (error) {
+                  setCheckoutError(error instanceof Error ? error.message : "決済ページの起動に失敗しました。");
+                } finally {
+                  setCheckoutBusy("");
+                }
+              }}
+            >
+              {user?.plan === plan.id ? "加入中" : checkoutBusy === plan.id ? "移動中..." : plan.cta}
             </Btn>
           </div>
         ))}
+      </div>
+
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 2, padding: "28px 32px", marginBottom: 48 }}>
+        <p style={{ fontFamily: SERIF, fontSize: 20, marginBottom: 10 }}>追加クレジット</p>
+        <p style={{ fontSize: 13, color: C.textMid, lineHeight: 1.8, marginBottom: 20 }}>
+          月額プランの基本クレジットを使い切ったあとも、現在加入中のプラン単価に応じて 10 クレジットずつ追加できます。
+          Free は初回だけ特別価格、その後は通常価格で追加します。
+        </p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 14 }}>
+          {topupRows.map((row) => (
+            <div key={row.planId} style={{ border: `1px solid ${row.planId === "growth" ? C.goldBorder : C.borderLight}`, background: row.planId === "growth" ? C.goldLight : C.bg, padding: "16px 18px" }}>
+              <p style={{ fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: row.planId === "growth" ? C.gold : C.textSub, marginBottom: 8 }}>
+                {row.note}
+              </p>
+              <p style={{ fontSize: 16, color: C.text, fontWeight: 600, marginBottom: 6 }}>{row.label}</p>
+              <p style={{ fontFamily: JP, fontSize: 24, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums", marginBottom: 6 }}>
+                {formatYen(row.offer.priceYen)}
+              </p>
+              <p style={{ fontSize: 12, color: C.textMid, lineHeight: 1.7 }}>
+                10クレジット追加
+              </p>
+            </div>
+          ))}
+        </div>
+        {checkoutError ? (
+          <p style={{ fontSize: 12, color: C.red, marginTop: 14 }}>{checkoutError}</p>
+        ) : null}
       </div>
     </div>
   );
@@ -8929,6 +9375,11 @@ function SettingsPage({ user }) {
   const [notifications, setNotifications] = useState(true);
   const [autoDownload, setAutoDownload] = useState(false);
   const [quality, setQuality] = useState("high");
+  const creditOffers = getCreditPackOffers(user?.plan, Boolean(user?.introPackEligible));
+  const currentOffer = creditOffers[0] || null;
+  const formatYen = useCallback((value) => `¥${Number(value || 0).toLocaleString("ja-JP")}`, []);
+  const [topupBusy, setTopupBusy] = useState(false);
+  const [topupError, setTopupError] = useState("");
 
   const Toggle = ({ value, onChange }) => (
     <div onClick={() => onChange(!value)} style={{
@@ -8973,6 +9424,66 @@ function SettingsPage({ user }) {
                 <span style={{ fontSize: 13, fontWeight: 500, color: C.text }}>{value}</span>
               </div>
             ))}
+          </div>
+        </div>
+
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 2, overflow: "hidden" }}>
+          <div style={{ padding: "16px 24px", borderBottom: `1px solid ${C.borderLight}`, background: C.bg }}>
+            <p style={{ fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.textSub }}>追加クレジット</p>
+          </div>
+          <div style={{ padding: 24 }}>
+            {currentOffer ? (
+              <>
+                <div style={{ border: `1px solid ${user?.plan === "free" && user?.introPackEligible ? C.goldBorder : C.borderLight}`, background: user?.plan === "free" && user?.introPackEligible ? C.goldLight : C.bg, padding: "18px 18px 16px", marginBottom: 14 }}>
+                  <p style={{ fontSize: 11, color: C.textSub, letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 8 }}>
+                    {user?.plan === "free" && user?.introPackEligible ? "初回限定オファー" : "現在の追加パック"}
+                  </p>
+                  <p style={{ fontSize: 18, color: C.text, fontWeight: 600, marginBottom: 8 }}>
+                    {currentOffer.label}
+                  </p>
+                  <p style={{ fontFamily: JP, fontSize: 30, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums", marginBottom: 6 }}>
+                    {formatYen(currentOffer.priceYen)}
+                  </p>
+                  <p style={{ fontSize: 12, color: C.textMid, lineHeight: 1.7 }}>
+                    10クレジット追加
+                    {user?.plan !== "free" ? ` / ${getPlanLabel(user?.plan)} 単価` : ""}
+                  </p>
+                </div>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+                  <p style={{ fontSize: 12, color: C.textMid, lineHeight: 1.8, maxWidth: 420 }}>
+                    決済完了後に 10 クレジットを加算する追加購入枠です。Free で初回限定オファーが残っている場合は、通常価格より先にこちらが優先されます。
+                  </p>
+                  <Btn
+                    size="sm"
+                    onClick={async () => {
+                      if (!user?.id || !currentOffer || topupBusy) return;
+                      setTopupBusy(true);
+                      setTopupError("");
+                      try {
+                        const session = await createCheckoutSession({
+                          userId: user.id,
+                          mode: "payment",
+                          packCode: currentOffer.id,
+                        });
+                        window.location.assign(session.url);
+                      } catch (error) {
+                        setTopupError(error instanceof Error ? error.message : "決済ページの起動に失敗しました。");
+                      } finally {
+                        setTopupBusy(false);
+                      }
+                    }}
+                    disabled={topupBusy}
+                  >
+                    {topupBusy ? "移動中..." : "Stripeで購入"}
+                  </Btn>
+                </div>
+                {topupError ? <p style={{ fontSize: 12, color: C.red, marginTop: 12 }}>{topupError}</p> : null}
+              </>
+            ) : (
+              <p style={{ fontSize: 12, color: C.textMid, lineHeight: 1.8 }}>
+                Custom プランの追加クレジットは個別見積にします。
+              </p>
+            )}
           </div>
         </div>
 
@@ -9307,7 +9818,7 @@ export default function App() {
     return (
       <>
         <GlobalStyles />
-        <LandingPage onLogin={() => navigate("/login")} onSignup={() => { void openDemo(); }} />
+        <LandingPage onLogin={() => navigate("/login")} onSignup={() => navigate("/signup")} onTryDemo={() => { void openDemo(); }} />
       </>
     );
   }
@@ -9320,7 +9831,8 @@ export default function App() {
           title={infoPageMap[route]}
           route={route}
           onLogin={() => navigate("/login")}
-          onSignup={() => { void openDemo(); }}
+          onSignup={() => navigate("/signup")}
+          onTryDemo={() => { void openDemo(); }}
         />
       </>
     );
@@ -9330,7 +9842,7 @@ export default function App() {
     return (
       <>
         <GlobalStyles />
-        <LandingPage onLogin={() => navigate("/login")} onSignup={() => { void openDemo(); }} />
+        <LandingPage onLogin={() => navigate("/login")} onSignup={() => navigate("/signup")} onTryDemo={() => { void openDemo(); }} />
       </>
     );
   }
@@ -9436,8 +9948,8 @@ export default function App() {
         isMobile={isMobile}
       />
     ),
-    guide: <GuidePage />,
-    pricing: <PricingPage />,
+    guide: <GuidePage isMobile={isMobile} setPage={setPage} />,
+    pricing: <PricingPage user={user} />,
     settings: <SettingsPage user={user} />,
   };
 

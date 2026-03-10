@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { randomInt, randomUUID } from "node:crypto";
+import { createHmac, randomInt, randomUUID, timingSafeEqual } from "node:crypto";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, extname, join, normalize, resolve } from "node:path";
@@ -49,6 +49,18 @@ const FASHN_BASE_URL = (process.env.FASHN_BASE_URL || "https://api.fashn.ai/v1")
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/$/, "");
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
 const SUPABASE_STORAGE_BUCKET = String(process.env.SUPABASE_STORAGE_BUCKET || "app-assets");
+const STRIPE_SECRET_KEY = String(process.env.STRIPE_SECRET_KEY || "");
+const STRIPE_WEBHOOK_SECRET = String(process.env.STRIPE_WEBHOOK_SECRET || "");
+const STRIPE_PRICE_STARTER_MONTHLY = String(process.env.STRIPE_PRICE_STARTER_MONTHLY || "");
+const STRIPE_PRICE_GROWTH_MONTHLY = String(process.env.STRIPE_PRICE_GROWTH_MONTHLY || "");
+const STRIPE_PRICE_BUSINESS_MONTHLY = String(process.env.STRIPE_PRICE_BUSINESS_MONTHLY || "");
+const STRIPE_PRICE_ENTERPRISE_MONTHLY = String(process.env.STRIPE_PRICE_ENTERPRISE_MONTHLY || "");
+const STRIPE_PRICE_FREE_INTRO_10 = String(process.env.STRIPE_PRICE_FREE_INTRO_10 || "");
+const STRIPE_PRICE_FREE_TOPUP_10 = String(process.env.STRIPE_PRICE_FREE_TOPUP_10 || "");
+const STRIPE_PRICE_STARTER_TOPUP_10 = String(process.env.STRIPE_PRICE_STARTER_TOPUP_10 || "");
+const STRIPE_PRICE_GROWTH_TOPUP_10 = String(process.env.STRIPE_PRICE_GROWTH_TOPUP_10 || "");
+const STRIPE_PRICE_BUSINESS_TOPUP_10 = String(process.env.STRIPE_PRICE_BUSINESS_TOPUP_10 || "");
+const STRIPE_PRICE_ENTERPRISE_TOPUP_10 = String(process.env.STRIPE_PRICE_ENTERPRISE_TOPUP_10 || "");
 function normalizeTryonProModelName(value) {
   const v = String(value || "").trim().toLowerCase();
   if (!v) return "tryon-max";
@@ -150,6 +162,28 @@ const MODEL_RUN_CREDIT_BY_STRATEGY = {
   "product-to-model": 1,
 };
 const HIGH_QUALITY_PLANS = new Set(["growth", "business", "enterprise", "custom", "standard", "pro"]);
+const CREDIT_PACK_CONFIG = {
+  "free-intro-10": { planId: "free", credits: 10, amountYen: 500, priceId: STRIPE_PRICE_FREE_INTRO_10, introOnly: true },
+  "free-topup-10": { planId: "free", credits: 10, amountYen: 1800, priceId: STRIPE_PRICE_FREE_TOPUP_10, introOnly: false },
+  "starter-topup-10": { planId: "starter", credits: 10, amountYen: 1650, priceId: STRIPE_PRICE_STARTER_TOPUP_10, introOnly: false },
+  "growth-topup-10": { planId: "growth", credits: 10, amountYen: 1500, priceId: STRIPE_PRICE_GROWTH_TOPUP_10, introOnly: false },
+  "business-topup-10": { planId: "business", credits: 10, amountYen: 1250, priceId: STRIPE_PRICE_BUSINESS_TOPUP_10, introOnly: false },
+  "enterprise-topup-10": { planId: "enterprise", credits: 10, amountYen: 1000, priceId: STRIPE_PRICE_ENTERPRISE_TOPUP_10, introOnly: false },
+};
+const SUBSCRIPTION_PRICE_BY_PLAN = {
+  starter: STRIPE_PRICE_STARTER_MONTHLY,
+  growth: STRIPE_PRICE_GROWTH_MONTHLY,
+  business: STRIPE_PRICE_BUSINESS_MONTHLY,
+  enterprise: STRIPE_PRICE_ENTERPRISE_MONTHLY,
+};
+const PLAN_MONTHLY_CREDITS = {
+  free: 0,
+  starter: 30,
+  growth: 200,
+  business: 800,
+  enterprise: 2000,
+  custom: 2000,
+};
 
 const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]);
 
@@ -158,7 +192,7 @@ function ensureDbFile() {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
   if (!existsSync(STORAGE_ROOT)) mkdirSync(STORAGE_ROOT, { recursive: true });
   if (!existsSync(DB_PATH)) {
-    writeFileSync(DB_PATH, JSON.stringify({ users: [], jobs: [], jobEvents: [], creditEvents: [], assetLibraries: [] }, null, 2));
+    writeFileSync(DB_PATH, JSON.stringify({ users: [], jobs: [], jobEvents: [], creditEvents: [], assetLibraries: [], creditPackOrders: [] }, null, 2));
   }
 }
 
@@ -173,9 +207,10 @@ function loadDb() {
       jobEvents: Array.isArray(parsed.jobEvents) ? parsed.jobEvents : [],
       creditEvents: Array.isArray(parsed.creditEvents) ? parsed.creditEvents : [],
       assetLibraries: Array.isArray(parsed.assetLibraries) ? parsed.assetLibraries : [],
+      creditPackOrders: Array.isArray(parsed.creditPackOrders) ? parsed.creditPackOrders : [],
     };
   } catch {
-    return { users: [], jobs: [], jobEvents: [], creditEvents: [], assetLibraries: [] };
+    return { users: [], jobs: [], jobEvents: [], creditEvents: [], assetLibraries: [], creditPackOrders: [] };
   }
 }
 
@@ -197,6 +232,59 @@ function corsHeaders(contentType = "application/json; charset=utf-8") {
 function json(res, status, payload) {
   res.writeHead(status, corsHeaders());
   res.end(JSON.stringify(payload));
+}
+
+function redirect(res, location) {
+  res.writeHead(302, {
+    ...corsHeaders(),
+    Location: location,
+  });
+  res.end();
+}
+
+function requireStripeConfig() {
+  if (!STRIPE_SECRET_KEY) throw new Error("STRIPE_SECRET_KEY is missing");
+}
+
+async function stripeRequest(path, params) {
+  requireStripeConfig();
+  const response = await fetch(`https://api.stripe.com/v1${path}`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    },
+    body: new URLSearchParams(params),
+  });
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    throw new Error(data?.error?.message || text || `Stripe error ${response.status}`);
+  }
+  return data;
+}
+
+function verifyStripeWebhookSignature(rawBody, signatureHeader) {
+  if (!STRIPE_WEBHOOK_SECRET) throw new Error("STRIPE_WEBHOOK_SECRET is missing");
+  const header = String(signatureHeader || "");
+  const parts = Object.fromEntries(header.split(",").map((part) => {
+    const [k, v] = part.split("=");
+    return [k, v];
+  }));
+  const timestamp = parts.t;
+  const signature = parts.v1;
+  if (!timestamp || !signature) throw new Error("Invalid Stripe signature header");
+  const payload = `${timestamp}.${rawBody}`;
+  const digest = createHmac("sha256", STRIPE_WEBHOOK_SECRET).update(payload, "utf8").digest("hex");
+  const expected = Buffer.from(signature, "hex");
+  const actual = Buffer.from(digest, "hex");
+  if (expected.length !== actual.length || !timingSafeEqual(expected, actual)) {
+    throw new Error("Stripe signature verification failed");
+  }
+}
+
+function getPlanIdBySubscriptionPrice(priceId) {
+  return Object.entries(SUBSCRIPTION_PRICE_BY_PLAN).find(([, value]) => value === priceId)?.[0] || "";
 }
 
 function parseBody(req) {
@@ -255,7 +343,7 @@ function normalizeSupabasePlanId(plan) {
   if (value === "standard") return "growth";
   if (value === "light") return "starter";
   if (value === "pro") return "enterprise";
-  if (value === "starter" || value === "growth" || value === "business" || value === "enterprise" || value === "custom") {
+  if (value === "free" || value === "starter" || value === "growth" || value === "business" || value === "enterprise" || value === "custom") {
     return value;
   }
   return "growth";
@@ -279,8 +367,9 @@ async function upsertSupabaseUser(user) {
         user_id: String(user.id),
         email: String(user.email || ""),
         display_name: String(user.name || ""),
-          plan_id: normalizeSupabasePlanId(user.plan),
+        plan_id: normalizeSupabasePlanId(user.plan),
         credits: Number(user.credits || 0),
+        intro_pack_eligible: typeof user.introPackEligible === "boolean" ? user.introPackEligible : true,
       }]),
     });
     await supabaseRequest("/app_user_settings?on_conflict=user_id", {
@@ -297,6 +386,22 @@ async function upsertSupabaseUser(user) {
   } catch (error) {
     console.warn("[upsertSupabaseUser] skipped", error instanceof Error ? error.message : String(error));
   }
+}
+
+async function getSupabaseAuthUser(accessToken) {
+  if (!hasSupabaseConfig()) throw new Error("SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing");
+  const response = await fetch(`${SUPABASE_URL}/auth/v1/user`, {
+    headers: {
+      apikey: SUPABASE_SERVICE_ROLE_KEY,
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    throw new Error(data?.msg || data?.message || data?.error_description || data?.error || `Auth error ${response.status}`);
+  }
+  return data;
 }
 
 function pathExtFromMime(mime = "") {
@@ -615,6 +720,117 @@ function appendCreditEvent(userId, type, delta, payload = {}) {
     payload,
     createdAt: nowIso(),
   });
+}
+
+function createCreditPackOrder({ userId, planId, packCode, credits, amountYen, introPackEligible }) {
+  const order = {
+    id: id("cpo"),
+    userId,
+    planId,
+    packCode,
+    credits: Number(credits || 0),
+    amountYen: Number(amountYen || 0),
+    status: "pending",
+    stripeCheckoutSessionId: "",
+    stripePaymentIntentId: "",
+    payload: { introPackEligible: Boolean(introPackEligible) },
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  };
+  db.creditPackOrders.push(order);
+  saveDb();
+  return order;
+}
+
+function updateCreditPackOrder(orderId, payload = {}) {
+  const order = db.creditPackOrders.find((row) => row.id === orderId);
+  if (!order) return null;
+  Object.assign(order, payload, { updatedAt: nowIso() });
+  saveDb();
+  return order;
+}
+
+function creditUserFromPack({ userId, packCode, orderId = "", stripePaymentIntentId = "", stripeCheckoutSessionId = "" }) {
+  const user = findUser(userId);
+  if (!user) throw new Error("user not found");
+  const pack = CREDIT_PACK_CONFIG[packCode];
+  if (!pack) throw new Error("credit pack config not found");
+  if (orderId) {
+    const existing = db.creditPackOrders.find((row) => row.id === orderId);
+    if (existing?.status === "paid") return;
+  }
+  user.credits = Number(user.credits || 0) + Number(pack.credits || 0);
+  if (pack.introOnly) {
+    user.introPackEligible = false;
+  }
+  if (orderId) {
+    updateCreditPackOrder(orderId, {
+      status: "paid",
+      stripePaymentIntentId: stripePaymentIntentId || "",
+      stripeCheckoutSessionId: stripeCheckoutSessionId || "",
+      payload: {
+        creditedAt: nowIso(),
+      },
+    });
+  }
+  appendCreditEvent(userId, "credit_pack_purchase", Number(pack.credits || 0), {
+    packCode,
+    orderId,
+    stripePaymentIntentId,
+    stripeCheckoutSessionId,
+  });
+  saveDb();
+}
+
+function applySubscriptionInvoicePaid(invoice) {
+  const line = Array.isArray(invoice?.lines?.data) ? invoice.lines.data[0] || null : null;
+  const priceId = String(line?.price?.id || "");
+  const planId = getPlanIdBySubscriptionPrice(priceId);
+  const userId = String(line?.metadata?.user_id || invoice?.parent?.subscription_details?.metadata?.user_id || invoice?.metadata?.user_id || "");
+  if (!userId || !planId) return;
+  const user = findUser(userId);
+  if (!user) return;
+  user.plan = planId;
+  user.credits = Number(PLAN_MONTHLY_CREDITS[planId] || 0);
+  appendCreditEvent(userId, "subscription_cycle_reset", Number(PLAN_MONTHLY_CREDITS[planId] || 0), {
+    planId,
+    invoiceId: invoice.id,
+    stripeSubscriptionId: invoice.subscription || "",
+  });
+  saveDb();
+}
+
+function handleStripeWebhookEvent(eventPayload) {
+  const type = String(eventPayload?.type || "");
+  const object = eventPayload?.data?.object || {};
+  if (type === "checkout.session.completed") {
+    if (String(object?.mode || "") !== "payment") return;
+    const metadata = object?.metadata || {};
+    creditUserFromPack({
+      userId: String(metadata.user_id || object.client_reference_id || ""),
+      packCode: String(metadata.pack_code || ""),
+      orderId: String(metadata.order_id || ""),
+      stripePaymentIntentId: String(object.payment_intent || ""),
+      stripeCheckoutSessionId: String(object.id || ""),
+    });
+    return;
+  }
+  if (type === "invoice.paid") {
+    applySubscriptionInvoicePaid(object);
+    return;
+  }
+  if (type === "invoice.payment_failed") {
+    const line = Array.isArray(object?.lines?.data) ? object.lines.data[0] || null : null;
+    const userId = String(line?.metadata?.user_id || object?.parent?.subscription_details?.metadata?.user_id || object?.metadata?.user_id || "");
+    const planId = getPlanIdBySubscriptionPrice(String(line?.price?.id || ""));
+    if (!userId) return;
+    appendCreditEvent(userId, "subscription_payment_failed", 0, {
+      planId,
+      invoiceId: object.id,
+      stripeSubscriptionId: object.subscription || "",
+    });
+    saveDb();
+  }
 }
 
 function skuGuessFromPath(pathValue) {
@@ -2415,6 +2631,23 @@ const server = createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
   try {
+    if (req.method === "POST" && url.pathname === "/api/stripe/webhook") {
+      const rawBody = await new Promise((resolveBody, rejectBody) => {
+        let data = "";
+        req.on("data", (chunk) => {
+          data += chunk;
+          if (data.length > MAX_REQUEST_BYTES) rejectBody(new Error("payload too large"));
+        });
+        req.on("end", () => resolveBody(data));
+        req.on("error", rejectBody);
+      });
+      verifyStripeWebhookSignature(rawBody, req.headers["stripe-signature"]);
+      const payload = rawBody ? JSON.parse(rawBody) : {};
+      handleStripeWebhookEvent(payload);
+      json(res, 200, { received: true });
+      return;
+    }
+
     if (req.method === "GET" && url.pathname === "/api/health") {
       json(res, 200, {
         ok: true,
@@ -2818,12 +3051,66 @@ const server = createServer(async (req, res) => {
         email,
         password,
         name: "",
-        plan: "growth",
-        credits: 200,
+        plan: "free",
+        credits: 0,
+        introPackEligible: true,
         createdAt: nowIso(),
       };
       db.users.push(user);
       saveDb();
+      await upsertSupabaseUser(user);
+      json(res, 200, { user });
+      return;
+    }
+
+    if (req.method === "GET" && url.pathname === "/api/auth/google/start") {
+      const redirectTo = String(url.searchParams.get("redirectTo") || "").trim();
+      if (!redirectTo) {
+        json(res, 400, { error: "redirectTo is required" });
+        return;
+      }
+      if (!hasSupabaseConfig()) {
+        json(res, 500, { error: "SUPABASE_URL or SUPABASE_SERVICE_ROLE_KEY is missing" });
+        return;
+      }
+      redirect(res, `${SUPABASE_URL}/auth/v1/authorize?provider=google&redirect_to=${encodeURIComponent(redirectTo)}`);
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/auth/google/complete") {
+      const body = await parseBody(req);
+      const accessToken = String(body.accessToken || "").trim();
+      if (!accessToken) {
+        json(res, 400, { error: "accessToken is required" });
+        return;
+      }
+      const authUser = await getSupabaseAuthUser(accessToken);
+      const email = String(authUser?.email || "").trim().toLowerCase();
+      if (!email) {
+        json(res, 400, { error: "google email not found" });
+        return;
+      }
+      let user = db.users.find((u) => String(u.email || "").toLowerCase() === email);
+      if (!user) {
+        user = {
+          id: `usr_google_${String(authUser?.id || randomUUID()).replace(/[^a-zA-Z0-9_-]/g, "").slice(0, 24)}`,
+          email,
+          password: "",
+          name: String(
+            authUser?.user_metadata?.full_name
+            || authUser?.user_metadata?.name
+            || authUser?.user_metadata?.display_name
+            || email.split("@")[0]
+            || ""
+          ).trim(),
+          plan: "free",
+          credits: 0,
+          introPackEligible: true,
+          createdAt: nowIso(),
+        };
+        db.users.push(user);
+        saveDb();
+      }
       await upsertSupabaseUser(user);
       json(res, 200, { user });
       return;
@@ -2896,6 +3183,103 @@ const server = createServer(async (req, res) => {
       saveDb();
       await upsertSupabaseUser(user);
       json(res, 200, { user });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/billing/checkout-session") {
+      const body = await parseBody(req);
+      const userId = String(body.userId || "").trim();
+      const mode = String(body.mode || "").trim().toLowerCase();
+      const planId = String(body.planId || "").trim().toLowerCase();
+      const packCode = String(body.packCode || "").trim();
+      const successUrl = String(body.successUrl || "").trim();
+      const cancelUrl = String(body.cancelUrl || "").trim();
+      if (!userId) {
+        json(res, 400, { error: "userId is required" });
+        return;
+      }
+      if (!successUrl || !cancelUrl) {
+        json(res, 400, { error: "successUrl and cancelUrl are required" });
+        return;
+      }
+      const user = findUser(userId);
+      if (!user) {
+        json(res, 404, { error: "user not found" });
+        return;
+      }
+
+      if (mode === "subscription") {
+        const priceId = SUBSCRIPTION_PRICE_BY_PLAN[planId];
+        if (!priceId) {
+          json(res, 400, { error: "unsupported subscription plan" });
+          return;
+        }
+        const session = await stripeRequest("/checkout/sessions", {
+          mode: "subscription",
+          success_url: successUrl,
+          cancel_url: cancelUrl,
+          customer_email: String(user.email || ""),
+          client_reference_id: userId,
+          "line_items[0][price]": priceId,
+          "line_items[0][quantity]": "1",
+          "metadata[user_id]": userId,
+          "metadata[purchase_kind]": "subscription",
+          "metadata[plan_id]": planId,
+          "subscription_data[metadata][user_id]": userId,
+          "subscription_data[metadata][purchase_kind]": "subscription",
+          "subscription_data[metadata][plan_id]": planId,
+        });
+        json(res, 200, { url: session.url, id: session.id });
+        return;
+      }
+
+      if (mode === "payment") {
+        const pack = CREDIT_PACK_CONFIG[packCode];
+        if (!pack?.priceId) {
+          json(res, 400, { error: "unsupported credit pack" });
+          return;
+        }
+        if (pack.planId === "free") {
+          const eligible = Boolean(user.introPackEligible);
+          if (pack.introOnly && !eligible) {
+            json(res, 400, { error: "intro pack unavailable" });
+            return;
+          }
+        } else if (String(user.plan || "").toLowerCase() !== pack.planId) {
+          json(res, 400, { error: "pack does not match current plan" });
+          return;
+        }
+        const order = createCreditPackOrder({
+          userId,
+          planId: pack.planId,
+          packCode,
+          credits: pack.credits,
+          amountYen: pack.amountYen,
+          introPackEligible: Boolean(user.introPackEligible),
+        });
+        const session = await stripeRequest("/checkout/sessions", {
+          mode: "payment",
+          success_url: successUrl,
+          cancel_url: cancelUrl,
+          customer_email: String(user.email || ""),
+          client_reference_id: userId,
+          "line_items[0][price]": pack.priceId,
+          "line_items[0][quantity]": "1",
+          "metadata[user_id]": userId,
+          "metadata[purchase_kind]": "credit_pack",
+          "metadata[pack_code]": packCode,
+          "metadata[order_id]": order.id,
+          "payment_intent_data[metadata][user_id]": userId,
+          "payment_intent_data[metadata][purchase_kind]": "credit_pack",
+          "payment_intent_data[metadata][pack_code]": packCode,
+          "payment_intent_data[metadata][order_id]": order.id,
+        });
+        updateCreditPackOrder(order.id, { stripeCheckoutSessionId: session.id });
+        json(res, 200, { url: session.url, id: session.id, orderId: order.id });
+        return;
+      }
+
+      json(res, 400, { error: "unsupported checkout mode" });
       return;
     }
 

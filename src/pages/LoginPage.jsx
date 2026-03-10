@@ -1,10 +1,10 @@
 import { useEffect, useState } from "react";
 import Logo from "../components/Logo";
 import SeoHead from "../components/SeoHead";
-import { Btn, Divider } from "../components/ui";
+import { Btn } from "../components/ui";
 import { C, SANS } from "../theme";
 
-export default function LoginPage({ onLogin, onSignup, defaultTab = "login" }) {
+export default function LoginPage({ onLogin, onSignup, defaultTab = "login", initialError = "" }) {
   const [email, setEmail] = useState("");
   const [pass, setPass] = useState("");
   const [showPass, setShowPass] = useState(false);
@@ -16,10 +16,22 @@ export default function LoginPage({ onLogin, onSignup, defaultTab = "login" }) {
     setTab(defaultTab);
   }, [defaultTab]);
 
+  useEffect(() => {
+    setError(String(initialError || ""));
+  }, [initialError]);
+
   const handleAuth = async () => {
     if (isSubmitting) return;
-    const effectiveEmail = email.trim() || "dev@local.test";
+    const effectiveEmail = email.trim();
     const effectivePass = String(pass || "");
+    if (!effectiveEmail) {
+      setError("メールアドレスを入力してください。");
+      return;
+    }
+    if (!effectivePass) {
+      setError("パスワードを入力してください。");
+      return;
+    }
     setIsSubmitting(true);
     try {
       if (tab === "signup") {
@@ -185,39 +197,8 @@ export default function LoginPage({ onLogin, onSignup, defaultTab = "login" }) {
                   <span>{isSubmitting ? (tab === "login" ? "ログイン中..." : "作成中...") : (tab === "login" ? "ログイン" : "アカウントを作成")}</span>
                 </span>
               </Btn>
-              {tab === "login" && (
-                <p style={{ marginTop: 8, fontSize: 11, color: C.textSub }}>
-                  空欄で押すと開発者用アカウントでログインします。
-                </p>
-              )}
             </div>
 
-            <Divider label="または" />
-
-            <button
-              onClick={() => {
-                void handleAuth();
-              }}
-              disabled={isSubmitting}
-              style={{
-                width: "100%",
-                padding: "12px",
-                border: `1px solid ${C.border}`,
-                borderRadius: 1,
-                background: C.surface,
-                cursor: isSubmitting ? "not-allowed" : "pointer",
-                fontSize: 13,
-                fontFamily: SANS,
-                color: isSubmitting ? C.textSub : C.text,
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                gap: 10,
-                opacity: isSubmitting ? 0.7 : 1,
-              }}
-            >
-              <span style={{ fontSize: 16 }}>G</span> Google で続ける
-            </button>
             {error && <p style={{ fontSize: 12, color: C.red }}>{error}</p>}
           </div>
         </div>

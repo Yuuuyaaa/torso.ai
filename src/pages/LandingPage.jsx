@@ -187,7 +187,7 @@ function AnimatedNumber({ value, suffix = "", prefix = "" }) {
   );
 }
 
-export default function LandingPage({ onLogin, onSignup }) {
+export default function LandingPage({ onLogin, onSignup, onTryDemo }) {
   const [scrollY, setScrollY] = useState(0);
 
   useEffect(() => {
@@ -242,7 +242,7 @@ export default function LandingPage({ onLogin, onSignup }) {
             <Logo size="sm" />
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <Btn variant="ghost" onClick={onLogin}>ログイン</Btn>
-              <Btn variant="primary" onClick={onSignup} style={{ padding: "10px 28px", fontSize: 13 }}>無料で始める</Btn>
+              <Btn variant="primary" onClick={onSignup} style={{ padding: "10px 28px", fontSize: 13 }}>会員登録</Btn>
             </div>
           </div>
         </header>
@@ -305,9 +305,10 @@ export default function LandingPage({ onLogin, onSignup }) {
                 <br />
                 1枚の商品写真を、売れるビジュアルへ。
               </p>
-              <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
-                <Btn variant="primary" onClick={onSignup} style={{ padding: "15px 40px", fontSize: 15 }}>無料で試す</Btn>
-                <Btn variant="secondary" onClick={onLogin}>サービスを詳しく見る</Btn>
+              <div style={{ display: "flex", justifyContent: "center" }}>
+                <Btn variant="primary" onClick={onTryDemo || onLogin} style={{ padding: "15px 40px", fontSize: 15 }}>
+                  無料でデモを試す
+                </Btn>
               </div>
             </div>
 
@@ -617,9 +618,10 @@ export default function LandingPage({ onLogin, onSignup }) {
                     無料プランからお試しいただけます。
                     クレジットカード不要、即日利用開始。
                   </p>
-                  <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
-                    <Btn variant="primary" onClick={onSignup} style={{ padding: "16px 48px", fontSize: 16 }}>無料で始める</Btn>
-                    <Btn variant="secondary" onClick={onLogin}>ログイン</Btn>
+                  <div style={{ display: "flex", justifyContent: "center" }}>
+                    <Btn variant="primary" onClick={onTryDemo || onLogin} style={{ padding: "16px 48px", fontSize: 16 }}>
+                      無料でデモを試す
+                    </Btn>
                   </div>
                 </div>
               </div>

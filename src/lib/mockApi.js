@@ -11,12 +11,23 @@ const USE_BACKEND_API = import.meta.env.VITE_USE_BACKEND_API !== "false";
 const BACKEND_BASE_URL = (EXPLICIT_BACKEND_BASE_URL || DEFAULT_BACKEND_BASE_URL).replace(/\/$/, "");
 
 const PLAN_DEFS = {
+  free: { label: "Free", monthlyCredits: 0 },
   starter: { label: "Starter", monthlyCredits: 30 },
   growth: { label: "Growth", monthlyCredits: 200 },
   business: { label: "Business", monthlyCredits: 800 },
   enterprise: { label: "Enterprise", monthlyCredits: 2000 },
   custom: { label: "Custom", monthlyCredits: 2000 },
 };
+
+const CREDIT_PACK_DEFS = {
+  freeIntro: { id: "free-intro-10", label: "初回限定 10クレジット", credits: 10, priceYen: 500, oneTime: true },
+  freeStandard: { id: "free-topup-10", label: "追加 10クレジット", credits: 10, priceYen: 1800, oneTime: false },
+  starter: { id: "starter-topup-10", label: "追加 10クレジット", credits: 10, priceYen: 1650, oneTime: false },
+  growth: { id: "growth-topup-10", label: "追加 10クレジット", credits: 10, priceYen: 1500, oneTime: false },
+  business: { id: "business-topup-10", label: "追加 10クレジット", credits: 10, priceYen: 1250, oneTime: false },
+  enterprise: { id: "enterprise-topup-10", label: "追加 10クレジット", credits: 10, priceYen: 1000, oneTime: false },
+};
+const CREDIT_PACKS_BY_CODE = Object.fromEntries(Object.values(CREDIT_PACK_DEFS).map((pack) => [pack.id, pack]));
 
 const PLAN_ALIASES = {
   light: "starter",
@@ -187,6 +198,7 @@ function touchMonthlyCredits(user) {
     plan: resolvedPlan,
     creditMonth: month,
     credits: Number.isFinite(plan.monthlyCredits) ? plan.monthlyCredits : 999999,
+    introPackEligible: typeof user.introPackEligible === "boolean" ? user.introPackEligible : true,
   };
 }
 
@@ -207,6 +219,7 @@ function ensureLocalDevUser(db) {
     password: "",
     plan: "growth",
     credits: PLAN_DEFS.growth.monthlyCredits,
+    introPackEligible: false,
     creditMonth: currentMonthKey(),
     createdAt: nowIso(),
   });
@@ -310,6 +323,11 @@ async function backendRequest(path, options = {}) {
   return data;
 }
 
+function getGoogleCallbackUrl() {
+  if (typeof window === "undefined") return "/auth/callback";
+  return `${window.location.origin}/auth/callback`;
+}
+
 async function fileToDataUrl(file) {
   if (typeof file.dataUrl === "string") return file.dataUrl;
   if (!(file.rawFile instanceof File)) {
@@ -409,8 +427,9 @@ export async function signup({ email, password }) {
       email: normalizedEmail,
       name: "",
       password: normalizedPassword,
-      plan: "growth",
-      credits: PLAN_DEFS.growth.monthlyCredits,
+      plan: "free",
+      credits: PLAN_DEFS.free.monthlyCredits,
+      introPackEligible: true,
       creditMonth: currentMonthKey(),
       createdAt: nowIso(),
     });
@@ -418,6 +437,26 @@ export async function signup({ email, password }) {
     db.session.userId = user.id;
     return user;
   });
+}
+
+export function startGoogleLogin() {
+  endDemoSession();
+  if (USE_BACKEND_API) setApiMode("backend");
+  const callbackUrl = getGoogleCallbackUrl();
+  const url = `${BACKEND_BASE_URL}/api/auth/google/start?redirectTo=${encodeURIComponent(callbackUrl)}`;
+  window.location.assign(url);
+}
+
+export async function completeGoogleLogin(accessToken) {
+  const token = String(accessToken || "").trim();
+  if (!token) throw new Error("Googleログインのトークンが取得できませんでした。");
+  const data = await backendRequest("/api/auth/google/complete", {
+    method: "POST",
+    body: JSON.stringify({ accessToken: token }),
+  });
+  localStorage.setItem(SESSION_KEY, data.user.id);
+  setApiMode("backend");
+  return data.user;
 }
 
 export async function updateUserName(userId, name) {
@@ -466,6 +505,7 @@ export async function getCurrentUser() {
       credits: 800,
       createdAt: nowIso(),
       isDemo: true,
+      introPackEligible: false,
     };
   }
   if (shouldUseBackend()) {
@@ -1028,6 +1068,44 @@ export async function deleteGeneratedItems(userId, itemIds = []) {
 
 export function getPlanLabel(planId) {
   return PLAN_DEFS[resolvePlanId(planId)].label;
+}
+
+export function getCreditPackOffers(planId, introPackEligible = false) {
+  const resolvedPlan = resolvePlanId(planId);
+  if (resolvedPlan === "free") {
+    return [introPackEligible ? CREDIT_PACK_DEFS.freeIntro : CREDIT_PACK_DEFS.freeStandard];
+  }
+  if (resolvedPlan === "custom") return [];
+  return [CREDIT_PACK_DEFS[resolvedPlan]].filter(Boolean);
+}
+
+export async function createCheckoutSession({ userId, mode, planId = "", packCode = "" }) {
+  if (!userId) throw new Error("userId is required");
+  if (!shouldUseBackend()) {
+    throw new Error("決済はバックエンド接続時のみ利用できます。");
+  }
+  const normalizedMode = String(mode || "").trim().toLowerCase();
+  if (normalizedMode !== "subscription" && normalizedMode !== "payment") {
+    throw new Error("unsupported checkout mode");
+  }
+  const payload = {
+    userId,
+    mode: normalizedMode,
+    planId: String(planId || "").trim(),
+    packCode: String(packCode || "").trim(),
+    successUrl: typeof window !== "undefined" ? `${window.location.origin}/app` : "",
+    cancelUrl: typeof window !== "undefined" ? `${window.location.origin}/app` : "",
+  };
+  if (normalizedMode === "payment") {
+    const pack = CREDIT_PACKS_BY_CODE[payload.packCode];
+    if (!pack) throw new Error("unknown credit pack");
+  }
+  const data = await backendRequest("/api/billing/checkout-session", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+  if (!data?.url) throw new Error("checkout url missing");
+  return data;
 }
 
 export async function generateModelAssets({
