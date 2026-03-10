@@ -8785,6 +8785,30 @@ function PricingPage() {
         </p>
       </div>
 
+      {/* Cost comparison */}
+      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 2, padding: "28px 32px", marginBottom: 32 }}>
+        <p style={{ fontFamily: SERIF, fontSize: 20, marginBottom: 20 }}>従来コストとの比較</p>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 24 }}>
+          {[
+            { label: "従来の撮影外注", cost: "¥800〜¥3,000", unit: "/ 着", note: "撮影・加工・修正を含む" },
+            { label: "社内マネキン撮影", cost: "5〜10分", unit: "/ 着", note: "人件費と着せ替え工数が重い" },
+            { label: "本サービス", cost: "¥100〜¥300", unit: "/ 着", note: "自動生成を数秒で完了", highlight: true },
+          ].map((item) => (
+            <div key={item.label} style={{
+              padding: "16px 20px",
+              background: item.highlight ? C.goldLight : C.bg,
+              border: `1px solid ${item.highlight ? C.goldBorder : C.borderLight}`,
+              borderRadius: 1,
+            }}>
+              <p style={{ fontSize: 11, color: item.highlight ? C.gold : C.textSub, letterSpacing: "0.08em", marginBottom: 8, textTransform: "uppercase" }}>{item.label}</p>
+              <p style={{ fontFamily: JP, fontSize: 26, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums" }}>{item.cost}</p>
+              <p style={{ fontSize: 12, color: C.textSub }}>{item.unit}</p>
+              <p style={{ fontSize: 11, color: C.textSub, marginTop: 6 }}>{item.note}</p>
+            </div>
+          ))}
+        </div>
+      </div>
+
       <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 24 }}>
         <div style={{ display: "inline-flex", border: `1px solid ${C.border}`, background: C.surface, padding: 4 }}>
           <button
@@ -8893,30 +8917,6 @@ function PricingPage() {
             </Btn>
           </div>
         ))}
-      </div>
-
-      {/* Cost comparison */}
-      <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 2, padding: "28px 32px" }}>
-        <p style={{ fontFamily: SERIF, fontSize: 20, marginBottom: 20 }}>従来コストとの比較</p>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 24 }}>
-          {[
-            { label: "従来の撮影外注", cost: "¥800〜¥3,000", unit: "/ 着", note: "撮影・加工・修正を含む" },
-            { label: "社内マネキン撮影", cost: "5〜10分", unit: "/ 着", note: "人件費と着せ替え工数が重い" },
-            { label: "本サービス", cost: "¥100〜¥300", unit: "/ 着", note: "自動生成を数秒で完了", highlight: true },
-          ].map((item) => (
-            <div key={item.label} style={{
-              padding: "16px 20px",
-              background: item.highlight ? C.goldLight : C.bg,
-              border: `1px solid ${item.highlight ? C.goldBorder : C.borderLight}`,
-              borderRadius: 1,
-            }}>
-              <p style={{ fontSize: 11, color: item.highlight ? C.gold : C.textSub, letterSpacing: "0.08em", marginBottom: 8, textTransform: "uppercase" }}>{item.label}</p>
-              <p style={{ fontFamily: JP, fontSize: 26, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums" }}>{item.cost}</p>
-              <p style={{ fontSize: 12, color: C.textSub }}>{item.unit}</p>
-              <p style={{ fontSize: 11, color: C.textSub, marginTop: 6 }}>{item.note}</p>
-            </div>
-          ))}
-        </div>
       </div>
     </div>
   );
