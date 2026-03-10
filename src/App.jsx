@@ -8329,6 +8329,122 @@ function ModelsLibraryPage({ user, assets, setAssets, isMobile = false }) {
                   </div>
                   <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 14 }}>
                     <p style={{ fontSize: 12, color: C.textMid }}>{viewer.index + 1}/{viewer.items.length}</p>
+                    {!viewer.items[viewer.index]?.builtIn && (
+                      <>
+                        <div ref={modelSavePickerRef} style={{ position: "relative" }}>
+                          <Btn
+                            size="sm"
+                            variant="secondary"
+                            onClick={() => setModelSavePickerOpen((prev) => !prev)}
+                          >
+                            保存
+                          </Btn>
+                          {modelSavePickerOpen && (
+                            <div style={{
+                              position: "absolute",
+                              top: "calc(100% + 8px)",
+                              right: 0,
+                              width: 220,
+                              border: `1px solid ${C.border}`,
+                              background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(244,240,234,0.98))",
+                              boxShadow: "0 18px 40px rgba(50,38,22,0.16)",
+                              padding: 8,
+                              zIndex: 20,
+                            }}>
+                              <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: C.textSub, marginBottom: 8 }}>
+                                Save Format
+                              </p>
+                              <div style={{ display: "grid", gap: 6 }}>
+                                {[
+                                  { id: "png", label: "PNGで保存" },
+                                  { id: "jpg", label: "JPGで保存" },
+                                ].map((opt) => (
+                                  <button
+                                    key={opt.id}
+                                    onClick={() => {
+                                      setModelSaveFormat(opt.id);
+                                      setModelSavePickerOpen(false);
+                                      void downloadModelAsset(viewer.items[viewer.index], opt.id);
+                                    }}
+                                    style={{
+                                      border: `1px solid ${modelSaveFormat === opt.id ? C.goldBorder : C.borderLight}`,
+                                      background: modelSaveFormat === opt.id ? "linear-gradient(135deg, rgba(226,198,145,0.34), rgba(248,246,241,0.98))" : C.surface,
+                                      color: C.text,
+                                      fontSize: 12,
+                                      padding: "10px 12px",
+                                      textAlign: "left",
+                                      cursor: "pointer",
+                                    }}
+                                  >
+                                    {opt.label}
+                                  </button>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                        <div style={{ position: "relative" }}>
+                          <Btn size="sm" variant="ghost" onClick={() => setConfirmModelDeleteOpen(true)}>
+                            削除
+                          </Btn>
+                          {confirmModelDeleteOpen && (
+                            <div
+                              style={{
+                                position: "absolute",
+                                top: "calc(100% + 8px)",
+                                right: 0,
+                                width: 300,
+                                background: C.surface,
+                                border: `1px solid ${C.border}`,
+                                boxShadow: "0 10px 24px rgba(0,0,0,0.12)",
+                                padding: 12,
+                                zIndex: 25,
+                              }}
+                            >
+                              <p style={{ fontSize: 12, color: C.text, marginBottom: 6 }}>
+                                このモデル画像を削除しますか？
+                              </p>
+                              <p style={{ fontSize: 10, color: C.textSub, lineHeight: 1.5, marginBottom: 8 }}>
+                                削除した画像は元に戻せません。
+                              </p>
+                              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                                <button
+                                  onClick={() => setConfirmModelDeleteOpen(false)}
+                                  style={{
+                                    border: `1px solid ${C.border}`,
+                                    background: C.surface,
+                                    color: C.textSub,
+                                    fontSize: 11,
+                                    padding: "7px 8px",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  キャンセル
+                                </button>
+                                <button
+                                  onClick={() => {
+                                    const target = viewer.items[viewer.index];
+                                    if (!target?.id) return;
+                                    removeAsset(target.id);
+                                    setConfirmModelDeleteOpen(false);
+                                  }}
+                                  style={{
+                                    border: `1px solid ${C.red}`,
+                                    background: C.red,
+                                    color: C.surface,
+                                    fontSize: 11,
+                                    padding: "7px 8px",
+                                    cursor: "pointer",
+                                  }}
+                                >
+                                  削除する
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </>
+                    )}
                     <button onClick={closeViewer} style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 20, color: C.textMid }}>×</button>
                   </div>
                 </>
@@ -8432,125 +8548,6 @@ function ModelsLibraryPage({ user, assets, setAssets, isMobile = false }) {
                     </>
                   )}
                 </div>
-                {!isMobile && (
-                <aside style={{ borderLeft: `1px solid ${C.borderLight}`, background: C.surface, padding: 14, overflowY: "auto" }}>
-                  {!viewer.items[viewer.index]?.builtIn && (
-                    <div style={{ marginBottom: 14 }}>
-                      <div ref={modelSavePickerRef} style={{ position: "relative", marginBottom: 8 }}>
-                        <Btn
-                          size="sm"
-                          variant="secondary"
-                          onClick={() => setModelSavePickerOpen((prev) => !prev)}
-                        >
-                          保存
-                        </Btn>
-                        {modelSavePickerOpen && (
-                          <div style={{
-                            position: "absolute",
-                            top: "calc(100% + 8px)",
-                            left: 0,
-                            width: 220,
-                            border: `1px solid ${C.border}`,
-                            background: "linear-gradient(180deg, rgba(255,255,255,0.98), rgba(244,240,234,0.98))",
-                            boxShadow: "0 18px 40px rgba(50,38,22,0.16)",
-                            padding: 8,
-                            zIndex: 20,
-                          }}>
-                            <p style={{ fontSize: 10, letterSpacing: "0.1em", textTransform: "uppercase", color: C.textSub, marginBottom: 8 }}>
-                              Save Format
-                            </p>
-                            <div style={{ display: "grid", gap: 6 }}>
-                              {[
-                                { id: "png", label: "PNGで保存" },
-                                { id: "jpg", label: "JPGで保存" },
-                              ].map((opt) => (
-                                <button
-                                  key={opt.id}
-                                  onClick={() => {
-                                    setModelSaveFormat(opt.id);
-                                    setModelSavePickerOpen(false);
-                                    void downloadModelAsset(viewer.items[viewer.index], opt.id);
-                                  }}
-                                  style={{
-                                    border: `1px solid ${modelSaveFormat === opt.id ? C.goldBorder : C.borderLight}`,
-                                    background: modelSaveFormat === opt.id ? "linear-gradient(135deg, rgba(226,198,145,0.34), rgba(248,246,241,0.98))" : C.surface,
-                                    color: C.text,
-                                    fontSize: 12,
-                                    padding: "10px 12px",
-                                    textAlign: "left",
-                                    cursor: "pointer",
-                                  }}
-                                >
-                                  {opt.label}
-                                </button>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                      <div style={{ marginTop: 8 }}>
-                        <Btn
-                          size="sm"
-                          variant="ghost"
-                          onClick={() => setConfirmModelDeleteOpen(true)}
-                        >
-                          削除
-                        </Btn>
-                      </div>
-                      {confirmModelDeleteOpen && (
-                        <div
-                          style={{
-                            marginTop: 8,
-                            border: `1px solid ${C.border}`,
-                            background: C.bg,
-                            padding: 10,
-                          }}
-                        >
-                          <p style={{ fontSize: 12, color: C.text, marginBottom: 6 }}>
-                            このモデル画像を削除しますか？
-                          </p>
-                          <p style={{ fontSize: 10, color: C.textSub, lineHeight: 1.5, marginBottom: 8 }}>
-                            削除した画像は元に戻せません。
-                          </p>
-                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
-                            <button
-                              onClick={() => setConfirmModelDeleteOpen(false)}
-                              style={{
-                                border: `1px solid ${C.border}`,
-                                background: C.surface,
-                                color: C.textSub,
-                                fontSize: 11,
-                                padding: "7px 8px",
-                                cursor: "pointer",
-                              }}
-                            >
-                              キャンセル
-                            </button>
-                            <button
-                              onClick={() => {
-                                const target = viewer.items[viewer.index];
-                                if (!target?.id) return;
-                                removeAsset(target.id);
-                                setConfirmModelDeleteOpen(false);
-                              }}
-                              style={{
-                                border: `1px solid ${C.red}`,
-                                background: C.red,
-                                color: C.surface,
-                                fontSize: 11,
-                                padding: "7px 8px",
-                                cursor: "pointer",
-                              }}
-                            >
-                              削除する
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </aside>
-                )}
               </div>
             </div>
             {!isMobile && (
