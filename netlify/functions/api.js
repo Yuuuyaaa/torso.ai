@@ -1,4 +1,5 @@
 import { createHmac, randomUUID, scryptSync, timingSafeEqual } from "node:crypto";
+import { deflateSync } from "node:zlib";
 
 const SUPABASE_URL = String(process.env.SUPABASE_URL || "").replace(/\/$/, "");
 const SUPABASE_SERVICE_ROLE_KEY = String(process.env.SUPABASE_SERVICE_ROLE_KEY || "");
@@ -1201,11 +1202,74 @@ function toAbsoluteUrl(event, value) {
 }
 
 function createSolidBackgroundDataUrl(hex = "#FFFFFF") {
-  const normalized = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(String(hex || "").trim())
-    ? String(hex || "").trim()
-    : "#FFFFFF";
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="1536" viewBox="0 0 1536 1536"><rect width="1536" height="1536" fill="${normalized}"/></svg>`;
-  return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
+  const normalized = String(hex || "").trim();
+  const safeHex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(normalized) ? normalized : "#FFFFFF";
+  const expandedHex = safeHex.length === 4
+    ? `#${safeHex.slice(1).split("").map((ch) => ch + ch).join("")}`
+    : safeHex;
+  const r = Number.parseInt(expandedHex.slice(1, 3), 16);
+  const g = Number.parseInt(expandedHex.slice(3, 5), 16);
+  const b = Number.parseInt(expandedHex.slice(5, 7), 16);
+  const width = 64;
+  const height = 64;
+  const row = Buffer.alloc((width * 4) + 1);
+  row[0] = 0;
+  for (let x = 0; x < width; x += 1) {
+    const offset = 1 + (x * 4);
+    row[offset] = r;
+    row[offset + 1] = g;
+    row[offset + 2] = b;
+    row[offset + 3] = 255;
+  }
+  const raw = Buffer.concat(Array.from({ length: height }, () => row));
+  const compressed = deflateSync(raw);
+  const crcTable = createPngCrcTable();
+  const png = Buffer.concat([
+    Buffer.from("89504e470d0a1a0a", "hex"),
+    pngChunk("IHDR", (() => {
+      const ihdr = Buffer.alloc(13);
+      ihdr.writeUInt32BE(width, 0);
+      ihdr.writeUInt32BE(height, 4);
+      ihdr[8] = 8;
+      ihdr[9] = 6;
+      ihdr[10] = 0;
+      ihdr[11] = 0;
+      ihdr[12] = 0;
+      return ihdr;
+    })(), crcTable),
+    pngChunk("IDAT", compressed, crcTable),
+    pngChunk("IEND", Buffer.alloc(0), crcTable),
+  ]);
+  return `data:image/png;base64,${png.toString("base64")}`;
+}
+
+function createPngCrcTable() {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) {
+      c = (c & 1) ? (0xedb88320 ^ (c >>> 1)) : (c >>> 1);
+    }
+    table[n] = c >>> 0;
+  }
+  return table;
+}
+
+function pngCrc32(buffer, table) {
+  let crc = 0xffffffff;
+  for (let i = 0; i < buffer.length; i += 1) {
+    crc = table[(crc ^ buffer[i]) & 0xff] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xffffffff) >>> 0;
+}
+
+function pngChunk(type, data, crcTable) {
+  const typeBuffer = Buffer.from(type, "ascii");
+  const lengthBuffer = Buffer.alloc(4);
+  lengthBuffer.writeUInt32BE(data.length, 0);
+  const crcBuffer = Buffer.alloc(4);
+  crcBuffer.writeUInt32BE(pngCrc32(Buffer.concat([typeBuffer, data]), crcTable), 0);
+  return Buffer.concat([lengthBuffer, typeBuffer, data, crcBuffer]);
 }
 
 function getPromptReferenceUrl(event, styleMode) {
