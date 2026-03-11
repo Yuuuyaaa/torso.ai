@@ -51,6 +51,18 @@ const MOBILE_PRIMARY_NAV_IDS = ["products", "upload", "history", "edit", "models
 const DASHBOARD_CACHE_PREFIX = "torso-dashboard-cache-v1";
 const DASHBOARD_CACHE_TTL_MS = 3 * 60 * 1000;
 
+function getSubscriptionCreditsValue(user) {
+  return Math.max(0, Number(user?.subscriptionCredits ?? user?.subscription_credits ?? 0));
+}
+
+function getTotalCreditsValue(user) {
+  return Math.max(0, Number(user?.credits || 0));
+}
+
+function getPurchasedCreditsValue(user) {
+  return Math.max(0, getTotalCreditsValue(user) - getSubscriptionCreditsValue(user));
+}
+
 // ─────────────────────────────────────────────
 // GLOBAL STYLES
 // ─────────────────────────────────────────────
@@ -231,8 +243,11 @@ function Sidebar({ page, setPage, user, onLogout, onSignup, onOpenCreditHistory,
   const topNavItems = topNavItemsBase;
   const lowerNavItems = lowerNavItemsBase;
   const planKey = String(user?.plan || "").toLowerCase();
-  const planMaxCredits = PLAN_MAX_CREDITS[planKey] || Math.max(1, Number(user?.credits || 0));
-  const progressPercent = Math.max(4, Math.min(100, (Number(user?.credits || 0) / planMaxCredits) * 100));
+  const totalCredits = getTotalCreditsValue(user);
+  const subscriptionCredits = getSubscriptionCreditsValue(user);
+  const purchasedCredits = getPurchasedCreditsValue(user);
+  const planMaxCredits = PLAN_MAX_CREDITS[planKey] || Math.max(1, totalCredits);
+  const progressPercent = Math.max(4, Math.min(100, (subscriptionCredits / Math.max(1, planMaxCredits)) * 100));
 
   useEffect(() => {
     if (!isMobile && mobileMoreOpen) setMobileMoreOpen(false);
@@ -249,7 +264,7 @@ function Sidebar({ page, setPage, user, onLogout, onSignup, onOpenCreditHistory,
     const moreMenuItems = [
       { id: "studio", label: "スタジオ", meta: "", action: () => setPage("studio"), active: page === "studio" },
       { id: "pricing", label: "プラン", meta: getPlanLabel(user?.plan), action: () => setPage("pricing"), active: page === "pricing" },
-      { id: "credit-history", label: "クレジット履歴", meta: `${Number(user?.credits || 0)} cr`, action: onOpenCreditHistory, active: false },
+      { id: "credit-history", label: "クレジット履歴", meta: `${totalCredits} cr`, action: onOpenCreditHistory, active: false },
       { id: "guide", label: "使い方", meta: "", action: () => setPage("guide"), active: page === "guide" },
       { id: "settings", label: "設定", meta: "", action: () => setPage("settings"), active: page === "settings" },
     ];
@@ -534,9 +549,12 @@ function Sidebar({ page, setPage, user, onLogout, onSignup, onOpenCreditHistory,
           <Tag color={C.green} bg={C.greenLight}>{getPlanLabel(user.plan)}</Tag>
         </div>
         <div style={{ fontSize: 22, fontFamily: JP, fontWeight: 600, color: C.text, marginBottom: 6, fontVariantNumeric: "tabular-nums" }}>
-          {user.credits.toLocaleString()}
-          <span style={{ fontSize: 12, fontFamily: SANS, fontWeight: 300, color: C.textSub }}> / 月</span>
+          {totalCredits.toLocaleString()}
+          <span style={{ fontSize: 12, fontFamily: SANS, fontWeight: 300, color: C.textSub }}> 利用可能</span>
         </div>
+        <p style={{ fontSize: 11, color: C.textSub, marginBottom: 8, lineHeight: 1.6 }}>
+          月額 {subscriptionCredits.toLocaleString()}cr / 追加 {purchasedCredits.toLocaleString()}cr
+        </p>
           <div style={{ height: 3, background: C.borderLight, borderRadius: 2 }}>
             <div style={{
               height: "100%",
@@ -9625,6 +9643,9 @@ function SettingsPage({ user, setPage, onUserUpdate }) {
     if (last4) return `登録済みのカード（•••• ${last4}）で決済します。`;
     return "以前の決済に使ったカードでそのまま決済します。";
   }, [billingCustomer?.payload?.cardBrand, billingCustomer?.payload?.cardLast4]);
+  const totalCredits = getTotalCreditsValue(user);
+  const subscriptionCredits = getSubscriptionCreditsValue(user);
+  const purchasedCredits = getPurchasedCreditsValue(user);
 
   const billingStatusMeta = useCallback((status) => {
     const normalized = String(status || "").toLowerCase();
@@ -9707,6 +9728,18 @@ function SettingsPage({ user, setPage, onUserUpdate }) {
             <p style={{ fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.textSub }}>追加クレジット</p>
           </div>
           <div style={{ padding: 24 }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10, marginBottom: 18 }}>
+              {[
+                { label: "合計利用可能", value: `${totalCredits.toLocaleString()}cr` },
+                { label: "月額残高", value: `${subscriptionCredits.toLocaleString()}cr` },
+                { label: "追加購入残高", value: `${purchasedCredits.toLocaleString()}cr` },
+              ].map((item) => (
+                <div key={item.label} style={{ border: `1px solid ${C.borderLight}`, background: C.bg, padding: 14 }}>
+                  <p style={{ fontSize: 11, color: C.textSub, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>{item.label}</p>
+                  <p style={{ fontSize: 22, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums" }}>{item.value}</p>
+                </div>
+              ))}
+            </div>
             {currentOffer ? (
               <>
                 <div style={{ border: `1px solid ${user?.plan === "free" && user?.introPackEligible ? C.goldBorder : C.borderLight}`, background: user?.plan === "free" && user?.introPackEligible ? C.goldLight : C.bg, padding: "18px 18px 16px", marginBottom: 14 }}>

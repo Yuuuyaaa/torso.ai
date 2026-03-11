@@ -239,6 +239,7 @@ function mapUser(row) {
     name: row.display_name || "",
     plan: row.plan_id || "free",
     credits: Number(row.credits || 0),
+    subscriptionCredits: Number(row.subscription_credits || 0),
     introPackEligible: Boolean(row.intro_pack_eligible),
     createdAt: row.created_at || nowIso(),
   };
@@ -257,12 +258,12 @@ function verifyPassword(password, storedHash) {
 }
 
 async function getUserByEmail(email) {
-  const rows = await supabaseRequest(`/app_users?email=eq.${encodeURIComponent(email)}&select=user_id,email,display_name,plan_id,credits,intro_pack_eligible,created_at,password_hash&limit=1`);
+  const rows = await supabaseRequest(`/app_users?email=eq.${encodeURIComponent(email)}&select=user_id,email,display_name,plan_id,credits,subscription_credits,intro_pack_eligible,created_at,password_hash&limit=1`);
   return Array.isArray(rows) ? rows[0] || null : null;
 }
 
 async function getUserById(userId) {
-  const rows = await supabaseRequest(`/app_users?user_id=eq.${encodeURIComponent(userId)}&select=user_id,email,display_name,plan_id,credits,intro_pack_eligible,created_at,password_hash&limit=1`);
+  const rows = await supabaseRequest(`/app_users?user_id=eq.${encodeURIComponent(userId)}&select=user_id,email,display_name,plan_id,credits,subscription_credits,intro_pack_eligible,created_at,password_hash&limit=1`);
   return Array.isArray(rows) ? rows[0] || null : null;
 }
 
@@ -508,8 +509,7 @@ async function creditUserFromPack({ userId, packCode, orderId = "", stripePaymen
     const order = Array.isArray(orders) ? orders[0] || null : null;
     if (order?.status === "paid") return;
   }
-  const nextCredits = Number(user.credits || 0) + Number(pack.credits || 0);
-  await updateUserCredits(userId, nextCredits);
+  const updatedUser = await addPurchasedCredits(userId, Number(pack.credits || 0));
   if (pack.introOnly) {
     await markIntroPackConsumed(userId);
   }
@@ -528,7 +528,7 @@ async function creditUserFromPack({ userId, packCode, orderId = "", stripePaymen
     orderId,
     stripePaymentIntentId,
     stripeCheckoutSessionId,
-  }, nextCredits);
+  }, Number(updatedUser?.credits || 0));
 }
 
 async function applySubscriptionInvoicePaid(invoice) {
@@ -538,14 +538,8 @@ async function applySubscriptionInvoicePaid(invoice) {
   const userId = String(invoice?.lines?.data?.[0]?.metadata?.user_id || invoice?.parent?.subscription_details?.metadata?.user_id || invoice?.metadata?.user_id || "");
   if (!userId || !planId) return;
   const monthlyCredits = PLAN_MONTHLY_CREDITS[planId];
-  const rows = await supabaseRequest(`/app_users?user_id=eq.${encodeURIComponent(userId)}`, {
-    method: "PATCH",
-    body: {
-      plan_id: planId,
-      credits: Number(monthlyCredits || 0),
-    },
-  });
-  const user = Array.isArray(rows) ? rows[0] || null : null;
+  const previousUser = await getUserById(userId);
+  const user = await applySubscriptionCreditAllocation(userId, planId);
   const subscriptionId = String(invoice?.subscription || invoice?.parent?.subscription_details?.subscription || "");
   const existingOrder = subscriptionId ? await findSubscriptionOrderBySubscriptionId(subscriptionId) : null;
   if (existingOrder?.order_id) {
@@ -575,7 +569,7 @@ async function applySubscriptionInvoicePaid(invoice) {
       },
     });
   }
-  await appendCreditEvent(userId, "subscription_cycle_reset", Number(monthlyCredits || 0), {
+  await appendCreditEvent(userId, "subscription_cycle_reset", Number((user?.credits || 0) - Number(previousUser?.credits || 0)), {
     planId,
     invoiceId: invoice.id,
     stripeSubscriptionId: subscriptionId,
@@ -781,6 +775,7 @@ async function findOrCreateGoogleUser(authUser) {
       display_name: displayName,
       plan_id: "free",
       credits: 0,
+      subscription_credits: 0,
       intro_pack_eligible: true,
       password_hash: "",
     },
@@ -1239,6 +1234,14 @@ async function appendJobEvent(userId, jobId, eventType, payload = {}) {
   });
 }
 
+function getSubscriptionCreditBalance(user) {
+  return Math.max(0, Number(user?.subscription_credits || 0));
+}
+
+function getPurchasedCreditBalance(user) {
+  return Math.max(0, Number(user?.credits || 0) - getSubscriptionCreditBalance(user));
+}
+
 async function updateUserCredits(userId, nextCredits) {
   const rows = await supabaseRequest(`/app_users?user_id=eq.${encodeURIComponent(userId)}`, {
     method: "PATCH",
@@ -1253,9 +1256,74 @@ async function updateUserPlanAndCredits(userId, planId, nextCredits) {
     body: {
       plan_id: String(planId || "free"),
       credits: Number(nextCredits || 0),
+      subscription_credits: Number(PLAN_MONTHLY_CREDITS[String(planId || "free").toLowerCase()] || 0),
     },
   });
   return Array.isArray(rows) ? rows[0] || null : null;
+}
+
+async function patchUserCreditState(userId, payload) {
+  const rows = await supabaseRequest(`/app_users?user_id=eq.${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    body: payload,
+  });
+  return Array.isArray(rows) ? rows[0] || null : null;
+}
+
+async function addPurchasedCredits(userId, amount) {
+  const user = await getUserById(userId);
+  if (!user) throw new Error("user not found");
+  return patchUserCreditState(userId, {
+    credits: Number(user.credits || 0) + Number(amount || 0),
+  });
+}
+
+async function applySubscriptionCreditAllocation(userId, planId) {
+  const user = await getUserById(userId);
+  if (!user) throw new Error("user not found");
+  const purchasedCredits = getPurchasedCreditBalance(user);
+  const subscriptionCredits = Number(PLAN_MONTHLY_CREDITS[planId] || 0);
+  return patchUserCreditState(userId, {
+    plan_id: String(planId || "free"),
+    credits: purchasedCredits + subscriptionCredits,
+    subscription_credits: subscriptionCredits,
+  });
+}
+
+async function reserveUserCredits(userId, amount) {
+  const user = await getUserById(userId);
+  if (!user) throw new Error("user not found");
+  const totalCredits = Number(user.credits || 0);
+  const subscriptionCredits = getSubscriptionCreditBalance(user);
+  const reserveAmount = Number(amount || 0);
+  if (totalCredits < reserveAmount) {
+    throw new Error(`insufficient credits: need ${reserveAmount}, have ${totalCredits}`);
+  }
+  const subscriptionUsed = Math.min(subscriptionCredits, reserveAmount);
+  const purchasedUsed = reserveAmount - subscriptionUsed;
+  const updated = await patchUserCreditState(userId, {
+    credits: totalCredits - reserveAmount,
+    subscription_credits: subscriptionCredits - subscriptionUsed,
+  });
+  return {
+    user: updated,
+    subscriptionUsed,
+    purchasedUsed,
+  };
+}
+
+async function refundUserCredits(userId, amount) {
+  const user = await getUserById(userId);
+  if (!user) throw new Error("user not found");
+  const planLimit = Number(PLAN_MONTHLY_CREDITS[String(user.plan_id || "free").toLowerCase()] || 0);
+  const currentSubscriptionCredits = getSubscriptionCreditBalance(user);
+  const restoreAmount = Number(amount || 0);
+  const subscriptionRestore = Math.min(planLimit - currentSubscriptionCredits, restoreAmount);
+  const nextSubscriptionCredits = currentSubscriptionCredits + Math.max(0, subscriptionRestore);
+  return patchUserCreditState(userId, {
+    credits: Number(user.credits || 0) + restoreAmount,
+    subscription_credits: nextSubscriptionCredits,
+  });
 }
 
 async function updateJobRow(jobId, payload) {
@@ -1513,6 +1581,7 @@ export async function handler(event) {
           display_name: "",
           plan_id: "free",
           credits: 0,
+          subscription_credits: 0,
           intro_pack_eligible: true,
           password_hash: hashPassword(password),
         },
@@ -1553,6 +1622,7 @@ export async function handler(event) {
             display_name: email.split("@")[0] || "user",
             plan_id: "growth",
             credits: 200,
+            subscription_credits: 200,
             password_hash: hashPassword(""),
           },
         });
@@ -1651,9 +1721,9 @@ export async function handler(event) {
         "metadata[target_plan_id]": targetPlanId,
       });
 
-      const nextCredits = Number(PLAN_MONTHLY_CREDITS[targetPlanId] || 0);
       const previousCredits = Number(user.credits || 0);
-      const updatedUser = await updateUserPlanAndCredits(userId, targetPlanId, nextCredits);
+      const updatedUser = await applySubscriptionCreditAllocation(userId, targetPlanId);
+      const nextCredits = Number(updatedUser?.credits || 0);
       await updateSubscriptionOrder(order.order_id, {
         plan_id: targetPlanId,
         status: "active",
@@ -1753,8 +1823,8 @@ export async function handler(event) {
               "metadata[plan_id]": planId,
               "metadata[order_id]": orderId,
             });
-            const nextCredits = Number(PLAN_MONTHLY_CREDITS[planId] || 0);
-            const updatedUser = await updateUserPlanAndCredits(userId, planId, nextCredits);
+            const updatedUser = await applySubscriptionCreditAllocation(userId, planId);
+            const nextCredits = Number(updatedUser?.credits || 0);
             if (orderId) {
               await updateSubscriptionOrder(orderId, {
                 status: "active",
@@ -1781,7 +1851,7 @@ export async function handler(event) {
                 cardExpYear: billingProfile.cardExpYear,
               },
             });
-            await appendCreditEvent(userId, "subscription_cycle_reset", nextCredits, {
+            await appendCreditEvent(userId, "subscription_cycle_reset", nextCredits - Number(user.credits || 0), {
               planId,
               stripeSubscriptionId: String(subscription.id || ""),
               source: "direct_subscription_create",
@@ -2051,13 +2121,15 @@ export async function handler(event) {
 
       const jobId = id("job");
       const createdAt = nowIso();
-      const nextCredits = currentCredits - reservedCredits;
-      await updateUserCredits(userId, nextCredits);
+      const reservation = await reserveUserCredits(userId, reservedCredits);
+      const nextCredits = Number(reservation.user?.credits || 0);
       await appendCreditEvent(userId, "job_reserved", -reservedCredits, {
         jobId,
         imageCount: normalizedFiles.length,
         creditRate,
         style,
+        subscriptionCreditsUsed: reservation.subscriptionUsed,
+        purchasedCreditsUsed: reservation.purchasedUsed,
       }, nextCredits);
 
       await supabaseRequest("/app_jobs", {
@@ -2068,7 +2140,13 @@ export async function handler(event) {
           style,
           status: "queued",
           output_preset: outputPreset,
-          style_config: normalizedStyleConfig,
+          style_config: {
+            ...normalizedStyleConfig,
+            creditBuckets: {
+              subscription: reservation.subscriptionUsed,
+              purchased: reservation.purchasedUsed,
+            },
+          },
           background_asset_id: backgroundAssetId,
           model_asset_id: modelAssetId,
           model_run_strategy: modelRunStrategy,
@@ -2157,7 +2235,7 @@ export async function handler(event) {
 
       if (errorCount > 0) {
         const refund = errorCount * creditRate;
-        const refundedUser = await updateUserCredits(userId, nextCredits + refund);
+        const refundedUser = await refundUserCredits(userId, refund);
         await appendCreditEvent(userId, "job_error_refund", refund, {
           jobId,
           refundedCount: errorCount,
@@ -2194,13 +2272,15 @@ export async function handler(event) {
 
       const jobId = id("job");
       const createdAt = nowIso();
-      const nextCredits = currentCredits - reservedCredits;
-      await updateUserCredits(userId, nextCredits);
+      const reservation = await reserveUserCredits(userId, reservedCredits);
+      const nextCredits = Number(reservation.user?.credits || 0);
       await appendCreditEvent(userId, "model_generate_reserved", -reservedCredits, {
         jobId,
         numImages,
         resolution,
         targetGender,
+        subscriptionCreditsUsed: reservation.subscriptionUsed,
+        purchasedCreditsUsed: reservation.purchasedUsed,
       }, nextCredits);
 
       await supabaseRequest("/app_jobs", {
@@ -2220,6 +2300,10 @@ export async function handler(event) {
             quality: resolution === "4k" ? "high" : "standard",
             customPrompt: prompt,
             generator: "model-create",
+            creditBuckets: {
+              subscription: reservation.subscriptionUsed,
+              purchased: reservation.purchasedUsed,
+            },
           },
           background_asset_id: null,
           model_asset_id: null,
@@ -2355,7 +2439,7 @@ export async function handler(event) {
 
       if (failedCount > 0) {
         const refundCredits = failedCount * modelCreditRate;
-        const refundedUser = await updateUserCredits(userId, nextCredits + refundCredits);
+        const refundedUser = await refundUserCredits(userId, refundCredits);
         await appendCreditEvent(userId, "model_generate_refund", refundCredits, {
           jobId,
           numImages,

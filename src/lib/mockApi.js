@@ -188,17 +188,34 @@ function resolvePlanId(planId) {
   return PLAN_ALIASES[planId] || "growth";
 }
 
-function touchMonthlyCredits(user) {
-  const month = currentMonthKey();
-  if (user.creditMonth === month) return user;
-  const resolvedPlan = resolvePlanId(user.plan);
+function getSubscriptionCreditsValue(user) {
+  return Math.max(0, Number(user?.subscriptionCredits || 0));
+}
+
+function getPurchasedCreditsValue(user) {
+  return Math.max(0, Number(user?.credits || 0) - getSubscriptionCreditsValue(user));
+}
+
+function applyMonthlyCreditAllocation(user, planId) {
+  const resolvedPlan = resolvePlanId(planId || user?.plan);
   const plan = PLAN_DEFS[resolvedPlan];
+  const monthlyCredits = Number.isFinite(plan?.monthlyCredits) ? plan.monthlyCredits : 999999;
+  const purchasedCredits = getPurchasedCreditsValue(user);
   return {
     ...user,
     plan: resolvedPlan,
+    credits: purchasedCredits + monthlyCredits,
+    subscriptionCredits: monthlyCredits,
+    introPackEligible: typeof user?.introPackEligible === "boolean" ? user.introPackEligible : true,
+  };
+}
+
+function touchMonthlyCredits(user) {
+  const month = currentMonthKey();
+  if (user.creditMonth === month) return user;
+  return {
+    ...applyMonthlyCreditAllocation(user, user.plan),
     creditMonth: month,
-    credits: Number.isFinite(plan.monthlyCredits) ? plan.monthlyCredits : 999999,
-    introPackEligible: typeof user.introPackEligible === "boolean" ? user.introPackEligible : true,
   };
 }
 
@@ -219,6 +236,7 @@ function ensureLocalDevUser(db) {
     password: "",
     plan: "growth",
     credits: PLAN_DEFS.growth.monthlyCredits,
+    subscriptionCredits: PLAN_DEFS.growth.monthlyCredits,
     introPackEligible: false,
     creditMonth: currentMonthKey(),
     createdAt: nowIso(),
@@ -429,6 +447,7 @@ export async function signup({ email, password }) {
       password: normalizedPassword,
       plan: "free",
       credits: PLAN_DEFS.free.monthlyCredits,
+      subscriptionCredits: PLAN_DEFS.free.monthlyCredits,
       introPackEligible: true,
       creditMonth: currentMonthKey(),
       createdAt: nowIso(),
@@ -503,6 +522,7 @@ export async function getCurrentUser() {
       name: "デモ版ログイン画面",
       plan: "business",
       credits: 800,
+      subscriptionCredits: 800,
       createdAt: nowIso(),
       isDemo: true,
       introPackEligible: false,
@@ -751,6 +771,8 @@ export async function createJob({
       throw new Error(`クレジット不足です。必要 ${creditUsed}cr / 残り ${user.credits}cr`);
     }
 
+    const subscriptionUsed = Math.min(getSubscriptionCreditsValue(user), creditUsed);
+    user.subscriptionCredits = getSubscriptionCreditsValue(user) - subscriptionUsed;
     user.credits -= creditUsed;
 
     const now = Date.now();

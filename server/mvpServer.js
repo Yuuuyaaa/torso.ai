@@ -203,7 +203,15 @@ function loadDb() {
     const raw = readFileSync(DB_PATH, "utf8");
     const parsed = JSON.parse(raw);
     return {
-      users: Array.isArray(parsed.users) ? parsed.users : [],
+      users: Array.isArray(parsed.users)
+        ? parsed.users.map((user) => ({
+          ...user,
+          subscriptionCredits: Number(
+            user?.subscriptionCredits
+            ?? Math.min(Number(user?.credits || 0), Number(PLAN_MONTHLY_CREDITS[String(user?.plan || "free").toLowerCase()] || 0)),
+          ),
+        }))
+        : [],
       jobs: Array.isArray(parsed.jobs) ? parsed.jobs : [],
       jobEvents: Array.isArray(parsed.jobEvents) ? parsed.jobEvents : [],
       creditEvents: Array.isArray(parsed.creditEvents) ? parsed.creditEvents : [],
@@ -394,6 +402,7 @@ async function upsertSupabaseUser(user) {
         display_name: String(user.name || ""),
         plan_id: normalizeSupabasePlanId(user.plan),
         credits: Number(user.credits || 0),
+        subscription_credits: Number(user.subscriptionCredits || 0),
         intro_pack_eligible: typeof user.introPackEligible === "boolean" ? user.introPackEligible : true,
       }]),
     });
@@ -747,6 +756,48 @@ function appendCreditEvent(userId, type, delta, payload = {}) {
   });
 }
 
+function getSubscriptionCreditBalance(user) {
+  return Math.max(0, Number(user?.subscriptionCredits || 0));
+}
+
+function getPurchasedCreditBalance(user) {
+  return Math.max(0, Number(user?.credits || 0) - getSubscriptionCreditBalance(user));
+}
+
+function applySubscriptionCreditAllocationLocal(user, planId) {
+  const purchasedCredits = getPurchasedCreditBalance(user);
+  const subscriptionCredits = Number(PLAN_MONTHLY_CREDITS[planId] || 0);
+  user.plan = planId;
+  user.subscriptionCredits = subscriptionCredits;
+  user.credits = purchasedCredits + subscriptionCredits;
+  return user;
+}
+
+function addPurchasedCreditsLocal(user, amount) {
+  user.credits = Number(user.credits || 0) + Number(amount || 0);
+  return user;
+}
+
+function reserveUserCreditsLocal(user, amount) {
+  const reserveAmount = Number(amount || 0);
+  const subscriptionCredits = getSubscriptionCreditBalance(user);
+  const subscriptionUsed = Math.min(subscriptionCredits, reserveAmount);
+  const purchasedUsed = reserveAmount - subscriptionUsed;
+  user.subscriptionCredits = subscriptionCredits - subscriptionUsed;
+  user.credits = Number(user.credits || 0) - reserveAmount;
+  return { subscriptionUsed, purchasedUsed };
+}
+
+function refundUserCreditsLocal(user, amount) {
+  const restoreAmount = Number(amount || 0);
+  const planLimit = Number(PLAN_MONTHLY_CREDITS[String(user.plan || "free").toLowerCase()] || 0);
+  const currentSubscriptionCredits = getSubscriptionCreditBalance(user);
+  const subscriptionRestore = Math.min(planLimit - currentSubscriptionCredits, restoreAmount);
+  user.subscriptionCredits = currentSubscriptionCredits + Math.max(0, subscriptionRestore);
+  user.credits = Number(user.credits || 0) + restoreAmount;
+  return user;
+}
+
 function createCreditPackOrder({ userId, planId, packCode, credits, amountYen, introPackEligible }) {
   const order = {
     id: id("cpo"),
@@ -973,7 +1024,7 @@ function creditUserFromPack({ userId, packCode, orderId = "", stripePaymentInten
     const existing = db.creditPackOrders.find((row) => row.id === orderId);
     if (existing?.status === "paid") return;
   }
-  user.credits = Number(user.credits || 0) + Number(pack.credits || 0);
+  addPurchasedCreditsLocal(user, Number(pack.credits || 0));
   if (pack.introOnly) {
     user.introPackEligible = false;
   }
@@ -1004,8 +1055,8 @@ async function applySubscriptionInvoicePaid(invoice) {
   if (!userId || !planId) return;
   const user = findUser(userId);
   if (!user) return;
-  user.plan = planId;
-  user.credits = Number(PLAN_MONTHLY_CREDITS[planId] || 0);
+  const previousCredits = Number(user.credits || 0);
+  applySubscriptionCreditAllocationLocal(user, planId);
   const subscriptionId = String(invoice?.subscription || invoice?.parent?.subscription_details?.subscription || "");
   const existingOrder = subscriptionId ? findSubscriptionOrderBySubscriptionId(subscriptionId) : null;
   if (existingOrder?.id) {
@@ -1033,7 +1084,7 @@ async function applySubscriptionInvoicePaid(invoice) {
       },
     });
   }
-  appendCreditEvent(userId, "subscription_cycle_reset", Number(PLAN_MONTHLY_CREDITS[planId] || 0), {
+  appendCreditEvent(userId, "subscription_cycle_reset", Number(user.credits || 0) - previousCredits, {
     planId,
     invoiceId: invoice.id,
     stripeSubscriptionId: subscriptionId,
@@ -2530,7 +2581,7 @@ function finalizeJob(jobId) {
       item.billed = true;
     }
     if (item.status === "error" && !item.refunded) {
-      if (user) user.credits += job.creditRate;
+      if (user) refundUserCreditsLocal(user, job.creditRate);
       item.refunded = true;
       refundedCount += 1;
     }
@@ -3293,7 +3344,7 @@ const server = createServer(async (req, res) => {
         json(res, 400, { error: `insufficient credits: need ${reservedCredits}, have ${user.credits}` });
         return;
       }
-      user.credits -= reservedCredits;
+      reserveUserCreditsLocal(user, reservedCredits);
       appendCreditEvent(user.id, "model_generate_reserved", -reservedCredits, {
         numImages,
         resolution,
@@ -3375,7 +3426,7 @@ const server = createServer(async (req, res) => {
       }
       if (failedCount > 0) {
         const refundCredits = failedCount * modelCreditRate;
-        user.credits += refundCredits;
+        refundUserCreditsLocal(user, refundCredits);
         appendCreditEvent(user.id, "model_generate_refund", refundCredits, {
           numImages,
           failedCount,
@@ -3420,6 +3471,7 @@ const server = createServer(async (req, res) => {
         name: "",
         plan: "free",
         credits: 0,
+        subscriptionCredits: 0,
         introPackEligible: true,
         createdAt: nowIso(),
       };
@@ -3472,6 +3524,7 @@ const server = createServer(async (req, res) => {
           ).trim(),
           plan: "free",
           credits: 0,
+          subscriptionCredits: 0,
           introPackEligible: true,
           createdAt: nowIso(),
         };
@@ -3506,6 +3559,7 @@ const server = createServer(async (req, res) => {
           name: email.split("@")[0] || "user",
           plan: "growth",
           credits: 200,
+          subscriptionCredits: 200,
           createdAt: nowIso(),
         };
         db.users.push(user);
@@ -3630,9 +3684,8 @@ const server = createServer(async (req, res) => {
 
       const previousPlanId = user.plan || "free";
       const previousCredits = Number(user.credits || 0);
-      const nextCredits = Number(PLAN_MONTHLY_CREDITS[targetPlanId] || 0);
-      user.plan = targetPlanId;
-      user.credits = nextCredits;
+      applySubscriptionCreditAllocationLocal(user, targetPlanId);
+      const nextCredits = Number(user.credits || 0);
       updateSubscriptionOrder(order.id, {
         planId: targetPlanId,
         status: "active",
@@ -3753,8 +3806,8 @@ const server = createServer(async (req, res) => {
               "metadata[plan_id]": planId,
               "metadata[order_id]": order.id,
             });
-            user.plan = planId;
-            user.credits = Number(PLAN_MONTHLY_CREDITS[planId] || 0);
+            const previousCredits = Number(user.credits || 0);
+            applySubscriptionCreditAllocationLocal(user, planId);
             updateSubscriptionOrder(order.id, {
               status: "active",
               stripeSubscriptionId: subscription.id || "",
@@ -3779,7 +3832,7 @@ const server = createServer(async (req, res) => {
                 cardExpYear: billingProfile.cardExpYear,
               },
             });
-            appendCreditEvent(userId, "subscription_cycle_reset", Number(PLAN_MONTHLY_CREDITS[planId] || 0), {
+            appendCreditEvent(userId, "subscription_cycle_reset", Number(user.credits || 0) - previousCredits, {
               planId,
               stripeSubscriptionId: String(subscription.id || ""),
               source: "direct_subscription_create",
@@ -4099,7 +4152,7 @@ const server = createServer(async (req, res) => {
         json(res, 400, { error: `retry requires credits: need ${reserveNeeded}, have ${user.credits}` });
         return;
       }
-      user.credits -= reserveNeeded;
+      reserveUserCreditsLocal(user, reserveNeeded);
       if (reserveNeeded > 0) {
         appendCreditEvent(user.id, "job_retry_reserved", -reserveNeeded, {
           jobId: job.id,
@@ -4235,7 +4288,7 @@ const server = createServer(async (req, res) => {
         return;
       }
 
-      user.credits -= reservedCredits;
+      reserveUserCreditsLocal(user, reservedCredits);
       appendCreditEvent(user.id, "job_reserved", -reservedCredits, {
         jobId,
         imageCount: items.length,
