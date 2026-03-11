@@ -1995,18 +1995,18 @@ function UploadPage({ user, jobs, onDataRefresh, onJobCreated, studioAssets = []
 
   useEffect(() => {
     if (!activeJob) return;
-    if (activeJob.status === "done" || activeJob.status === "error") {
-      setOptimisticEntryStatus({});
-      return;
-    }
-    const refs = new Set((activeJob.items || []).map((item) => String(item.clientRef || "")).filter(Boolean));
+    const items = Array.isArray(activeJob.items) ? activeJob.items : [];
+    const refs = new Set(items.map((item) => String(item.clientRef || "")).filter(Boolean));
     if (refs.size === 0) return;
     setOptimisticEntryStatus((prev) => {
-      let changed = false;
       const next = { ...(prev || {}) };
-      refs.forEach((id) => {
-        if (id in next) {
-          delete next[id];
+      let changed = false;
+      items.forEach((item) => {
+        const id = String(item?.clientRef || "");
+        const status = String(item?.status || "");
+        if (!id || !status) return;
+        if (next[id] !== status) {
+          next[id] = status;
           changed = true;
         }
       });
