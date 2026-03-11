@@ -24,6 +24,7 @@ import {
   changeSubscriptionPlan,
   createCustomerPortalSession,
   createCheckoutSession,
+  uploadAssetImage,
   startDemoSession,
   updateUserName,
 } from "./lib/mockApi";
@@ -6806,10 +6807,19 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
       try {
         const dataUrl = await fileToRenderableDataUrl(file);
         await ensureImageWithinMegapixels(dataUrl, PRODUCT_UPLOAD_MAX_MP);
+        const uploaded = user?.id && !user?.isDemo
+          ? await uploadAssetImage({
+            userId: user.id,
+            name: file.name,
+            dataUrl,
+            purpose: "products-library",
+          })
+          : { url: dataUrl };
         converted.push({
           id: `prd_${Math.random().toString(36).slice(2, 10)}`,
           name: file.name,
           dataUrl,
+          outputUrl: uploaded.url,
           category: "unassigned",
           builtIn: false,
           createdAt: new Date().toISOString(),
@@ -6821,7 +6831,7 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
     }
 
     setAssets((prev) => [...converted, ...prev]);
-  }, [setAssets]);
+  }, [setAssets, user?.id, user?.isDemo]);
 
   const removeAsset = useCallback((assetId) => {
     setAssets((prev) => prev.filter((asset) => asset.id !== assetId));

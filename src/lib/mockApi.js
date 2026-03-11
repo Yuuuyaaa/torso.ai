@@ -382,6 +382,35 @@ async function uploadFileForJob({ userId, file, purpose = "jobs-inputs" }) {
   return data.url;
 }
 
+export async function uploadAssetImage({ userId, name, dataUrl, purpose = "products-library" }) {
+  const normalizedUserId = String(userId || "").trim();
+  const normalizedDataUrl = String(dataUrl || "");
+  if (!normalizedUserId) throw new Error("userId is required");
+  if (!normalizedDataUrl.startsWith("data:image/")) {
+    throw new Error("画像アップロードに失敗しました");
+  }
+  if (!shouldUseBackend()) {
+    return { url: normalizedDataUrl, path: "", mime: "" };
+  }
+  const data = await backendRequest("/api/storage/upload", {
+    method: "POST",
+    body: JSON.stringify({
+      userId: normalizedUserId,
+      name: String(name || "image.jpg"),
+      dataUrl: normalizedDataUrl,
+      purpose,
+    }),
+  });
+  if (!data?.url) {
+    throw new Error("画像アップロードに失敗しました");
+  }
+  return {
+    url: String(data.url),
+    path: String(data.path || ""),
+    mime: String(data.mime || ""),
+  };
+}
+
 export async function login({ email, password }) {
   const normalizedEmail = (email || "").trim().toLowerCase();
   const normalizedPassword = String(password || "");
