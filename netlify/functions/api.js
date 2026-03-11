@@ -120,7 +120,7 @@ const SUBSCRIPTION_PRICE_BY_PLAN = {
   enterprise: STRIPE_PRICE_ENTERPRISE_MONTHLY,
 };
 const PLAN_MONTHLY_CREDITS = {
-  free: 0,
+  free: 1,
   starter: 30,
   growth: 200,
   business: 800,
@@ -270,14 +270,19 @@ async function storageUpload(path, buffer, contentType) {
 
 function mapUser(row) {
   if (!row) return null;
+  const planId = String(row.plan_id || "free").toLowerCase();
+  const credits = Math.max(0, Number(row.credits || 0));
+  const subscriptionCredits = Math.max(0, Number(row.subscription_credits || 0));
+  const introPackEligible = Boolean(row.intro_pack_eligible);
+  const shouldBootstrapFreeCredit = planId === "free" && credits <= 0 && subscriptionCredits <= 0 && introPackEligible;
   return {
     id: row.user_id,
     email: row.email || "",
     name: row.display_name || "",
     plan: row.plan_id || "free",
-    credits: Number(row.credits || 0),
-    subscriptionCredits: Number(row.subscription_credits || 0),
-    introPackEligible: Boolean(row.intro_pack_eligible),
+    credits: shouldBootstrapFreeCredit ? PLAN_MONTHLY_CREDITS.free : credits,
+    subscriptionCredits: shouldBootstrapFreeCredit ? PLAN_MONTHLY_CREDITS.free : subscriptionCredits,
+    introPackEligible,
     createdAt: row.created_at || nowIso(),
   };
 }
@@ -811,8 +816,8 @@ async function findOrCreateGoogleUser(authUser) {
       email,
       display_name: displayName,
       plan_id: "free",
-      credits: 0,
-      subscription_credits: 0,
+      credits: PLAN_MONTHLY_CREDITS.free,
+      subscription_credits: PLAN_MONTHLY_CREDITS.free,
       intro_pack_eligible: true,
       password_hash: "",
     },
@@ -1753,8 +1758,8 @@ export async function handler(event) {
           email,
           display_name: "",
           plan_id: "free",
-          credits: 0,
-          subscription_credits: 0,
+          credits: PLAN_MONTHLY_CREDITS.free,
+          subscription_credits: PLAN_MONTHLY_CREDITS.free,
           intro_pack_eligible: true,
           password_hash: hashPassword(password),
         },
