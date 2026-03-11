@@ -10304,6 +10304,46 @@ export default function App() {
       });
   }, [assetLibraryReady, user?.id, user?.isDemo, studioAssets, modelAssets, productAssets]);
 
+  const handleJobCreated = (job) => {
+    if (!job?.id) return;
+    setJobs((prev) => {
+      const next = Array.isArray(prev) ? [...prev] : [];
+      const idx = next.findIndex((row) => row.id === job.id);
+      if (idx >= 0) {
+        next[idx] = { ...next[idx], ...job };
+      } else {
+        next.unshift(job);
+      }
+      return next.sort((a, b) => +new Date(b.createdAt || 0) - +new Date(a.createdAt || 0));
+    });
+  };
+
+  const persistProductAssetsSnapshot = useCallback(async (nextAssets) => {
+    if (!user?.id || user?.isDemo) return;
+    const mergedProducts = mergeProductAssets(Array.isArray(nextAssets) ? nextAssets : []);
+    writeAssetLibrary(user.id, {
+      studio: studioAssets,
+      models: modelAssets,
+      products: stripProductAssetsForMeta(mergedProducts),
+    });
+    writeDashboardCache(user.id, {
+      jobs,
+      creditHistory,
+      studioAssets,
+      modelAssets,
+      productAssets: mergedProducts,
+    });
+    await persistProductAssetsToDb(user.id, mergedProducts);
+  }, [creditHistory, jobs, modelAssets, studioAssets, user?.id, user?.isDemo]);
+
+  const updateProductAssets = useCallback((updater) => {
+    setProductAssets((prev) => {
+      const nextAssets = mergeProductAssets(typeof updater === "function" ? updater(prev) : updater);
+      void persistProductAssetsSnapshot(nextAssets);
+      return nextAssets;
+    });
+  }, [persistProductAssetsSnapshot]);
+
   if (route === "/") {
     return (
       <>
@@ -10392,46 +10432,6 @@ export default function App() {
       </>
     );
   }
-
-  const handleJobCreated = (job) => {
-    if (!job?.id) return;
-    setJobs((prev) => {
-      const next = Array.isArray(prev) ? [...prev] : [];
-      const idx = next.findIndex((row) => row.id === job.id);
-      if (idx >= 0) {
-        next[idx] = { ...next[idx], ...job };
-      } else {
-        next.unshift(job);
-      }
-      return next.sort((a, b) => +new Date(b.createdAt || 0) - +new Date(a.createdAt || 0));
-    });
-  };
-
-  const persistProductAssetsSnapshot = useCallback(async (nextAssets) => {
-    if (!user?.id || user?.isDemo) return;
-    const mergedProducts = mergeProductAssets(Array.isArray(nextAssets) ? nextAssets : []);
-    writeAssetLibrary(user.id, {
-      studio: studioAssets,
-      models: modelAssets,
-      products: stripProductAssetsForMeta(mergedProducts),
-    });
-    writeDashboardCache(user.id, {
-      jobs,
-      creditHistory,
-      studioAssets,
-      modelAssets,
-      productAssets: mergedProducts,
-    });
-    await persistProductAssetsToDb(user.id, mergedProducts);
-  }, [creditHistory, jobs, modelAssets, studioAssets, user?.id, user?.isDemo]);
-
-  const updateProductAssets = useCallback((updater) => {
-    setProductAssets((prev) => {
-      const nextAssets = mergeProductAssets(typeof updater === "function" ? updater(prev) : updater);
-      void persistProductAssetsSnapshot(nextAssets);
-      return nextAssets;
-    });
-  }, [persistProductAssetsSnapshot]);
 
   const pages = {
     history: <HistoryPage user={user} jobs={jobs} onRefresh={refreshData} isMobile={isMobile} />,
