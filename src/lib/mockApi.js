@@ -8,6 +8,7 @@ const EXPLICIT_BACKEND_BASE_URL = String(import.meta.env.VITE_BACKEND_BASE_URL |
 const IS_LOCAL_BROWSER = typeof window === "undefined" || LOCAL_HOSTNAMES.has(window.location.hostname);
 const DEFAULT_BACKEND_BASE_URL = IS_LOCAL_BROWSER ? "http://localhost:8787" : "";
 const USE_BACKEND_API = import.meta.env.VITE_USE_BACKEND_API !== "false";
+// Local dev talks to the standalone API server; production stays same-origin via Netlify.
 const BACKEND_BASE_URL = (EXPLICIT_BACKEND_BASE_URL || DEFAULT_BACKEND_BASE_URL).replace(/\/$/, "");
 
 const PLAN_DEFS = {
