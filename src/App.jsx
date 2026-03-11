@@ -946,6 +946,33 @@ async function fileToRenderableDataUrl(file) {
   }
 }
 
+async function optimizeProductUploadDataUrl(dataUrl, sourceName = "product.jpg") {
+  const raw = String(dataUrl || "");
+  if (!raw.startsWith("data:image/")) return raw;
+  const estimatedBytes = Math.floor((raw.length * 3) / 4);
+  const shouldCompress = estimatedBytes > 2.5 * 1024 * 1024 || /png|heic|heif|webp/i.test(raw.slice(0, 64));
+  if (!shouldCompress) return raw;
+  try {
+    const img = await loadImageFromDataUrl(raw);
+    const maxSide = 2048;
+    const scale = Math.min(1, maxSide / Math.max(img.width || 1, img.height || 1));
+    const width = Math.max(1, Math.round((img.width || 1) * scale));
+    const height = Math.max(1, Math.round((img.height || 1) * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return raw;
+    ctx.fillStyle = "#FFFFFF";
+    ctx.fillRect(0, 0, width, height);
+    ctx.drawImage(img, 0, 0, width, height);
+    const optimized = canvas.toDataURL("image/jpeg", 0.82);
+    return optimized.startsWith("data:image/jpeg") ? optimized : raw;
+  } catch {
+    return raw;
+  }
+}
+
 function dataUrlToFile(dataUrl, filename = `asset-${Date.now()}.png`) {
   const match = String(dataUrl || "").match(/^data:([^;]+);base64,(.+)$/);
   if (!match) throw new Error("無効な画像データです");
@@ -6810,18 +6837,19 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
       try {
         const dataUrl = await fileToRenderableDataUrl(file);
         await ensureImageWithinMegapixels(dataUrl, PRODUCT_UPLOAD_MAX_MP);
+        const optimizedUploadDataUrl = await optimizeProductUploadDataUrl(dataUrl, file.name);
         const uploaded = user?.id && !user?.isDemo
           ? await uploadAssetImage({
             userId: user.id,
             name: file.name,
-            dataUrl,
+            dataUrl: optimizedUploadDataUrl,
             purpose: "products-library",
           })
           : { url: dataUrl };
         converted.push({
           id: `prd_${Math.random().toString(36).slice(2, 10)}`,
           name: file.name,
-          dataUrl,
+          dataUrl: optimizedUploadDataUrl,
           outputUrl: uploaded.url,
           category: "unassigned",
           builtIn: false,
