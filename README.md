@@ -95,6 +95,7 @@ npm run dev
 - `netlify/functions/api.js` に serverless 互換APIの土台を追加済み
 - デプロイ先では `VITE_BACKEND_BASE_URL` を未設定にすると同一オリジン `/api/*` を呼ぶ
 - ローカル開発だけ `http://localhost:8787` を既定値として使う
+- Auto Publishing が lock されている場合は Netlify 側で手動 deploy が必要
 - Netlify / Functions 側で必要な主な環境変数:
   - `FASHN_API_KEY`
   - `FASHN_BASE_URL`（必要なら）
