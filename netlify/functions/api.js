@@ -418,6 +418,10 @@ function getPlanIdBySubscriptionPrice(priceId) {
   return Object.entries(SUBSCRIPTION_PRICE_BY_PLAN).find(([, value]) => value === priceId)?.[0] || "";
 }
 
+function getInvoiceLinePriceId(line) {
+  return String(line?.price?.id || line?.plan?.id || line?.pricing?.price_details?.price || "");
+}
+
 async function markIntroPackConsumed(userId) {
   await supabaseRequest(`/app_users?user_id=eq.${encodeURIComponent(userId)}`, {
     method: "PATCH",
@@ -460,7 +464,7 @@ async function creditUserFromPack({ userId, packCode, orderId = "", stripePaymen
 
 async function applySubscriptionInvoicePaid(invoice) {
   const line = Array.isArray(invoice?.lines?.data) ? invoice.lines.data[0] || null : null;
-  const priceId = String(line?.price?.id || "");
+  const priceId = getInvoiceLinePriceId(line);
   const planId = getPlanIdBySubscriptionPrice(priceId);
   const userId = String(invoice?.lines?.data?.[0]?.metadata?.user_id || invoice?.parent?.subscription_details?.metadata?.user_id || invoice?.metadata?.user_id || "");
   if (!userId || !planId) return;
@@ -473,7 +477,8 @@ async function applySubscriptionInvoicePaid(invoice) {
     },
   });
   const user = Array.isArray(rows) ? rows[0] || null : null;
-  const existingOrder = invoice.subscription ? await findSubscriptionOrderBySubscriptionId(String(invoice.subscription)) : null;
+  const subscriptionId = String(invoice?.subscription || invoice?.parent?.subscription_details?.subscription || "");
+  const existingOrder = subscriptionId ? await findSubscriptionOrderBySubscriptionId(subscriptionId) : null;
   if (existingOrder?.order_id) {
     await updateSubscriptionOrder(existingOrder.order_id, {
       status: "active",
@@ -491,14 +496,14 @@ async function applySubscriptionInvoicePaid(invoice) {
       billingEmail: String(invoice.customer_email || user?.email || ""),
       payload: {
         source: "invoice.paid",
-        stripeSubscriptionId: String(invoice.subscription || ""),
+        stripeSubscriptionId: subscriptionId,
       },
     });
   }
   await appendCreditEvent(userId, "subscription_cycle_reset", Number(monthlyCredits || 0), {
     planId,
     invoiceId: invoice.id,
-    stripeSubscriptionId: invoice.subscription || "",
+    stripeSubscriptionId: subscriptionId,
   }, Number(user?.credits || monthlyCredits || 0));
 }
 
@@ -615,9 +620,10 @@ async function handleStripeWebhookEvent(eventPayload) {
   if (type === "invoice.payment_failed") {
     const userId = String(object?.lines?.data?.[0]?.metadata?.user_id || object?.parent?.subscription_details?.metadata?.user_id || object?.metadata?.user_id || "");
     const line = Array.isArray(object?.lines?.data) ? object.lines.data[0] || null : null;
-    const planId = getPlanIdBySubscriptionPrice(String(line?.price?.id || ""));
+    const planId = getPlanIdBySubscriptionPrice(getInvoiceLinePriceId(line));
     if (userId) {
-      const existingOrder = object.subscription ? await findSubscriptionOrderBySubscriptionId(String(object.subscription)) : null;
+      const subscriptionId = String(object?.subscription || object?.parent?.subscription_details?.subscription || "");
+      const existingOrder = subscriptionId ? await findSubscriptionOrderBySubscriptionId(subscriptionId) : null;
       if (existingOrder?.order_id) {
         await updateSubscriptionOrder(existingOrder.order_id, {
           status: "failed",
@@ -631,7 +637,7 @@ async function handleStripeWebhookEvent(eventPayload) {
       await appendCreditEvent(userId, "subscription_payment_failed", 0, {
         planId,
         invoiceId: object.id,
-        stripeSubscriptionId: object.subscription || "",
+        stripeSubscriptionId: subscriptionId,
       }, Number((await getUserById(userId))?.credits || 0));
     }
     if (stripeEventId) {

@@ -9148,6 +9148,7 @@ function PricingPage({ user }) {
   const formatYen = useCallback((value) => `¥${Number(value || 0).toLocaleString("ja-JP")}`, []);
   const [checkoutBusy, setCheckoutBusy] = useState("");
   const [checkoutError, setCheckoutError] = useState("");
+  const hasPaidPlan = ["starter", "growth", "business", "enterprise"].includes(String(user?.plan || "").toLowerCase());
   const topupRows = [
     { planId: "free", label: "Free 初回限定", note: "最初の1回のみ", offer: getCreditPackOffers("free", true)[0] },
     { planId: "free-repeat", label: "Free 通常追加", note: "2回目以降", offer: getCreditPackOffers("free", false)[0] },
@@ -9321,20 +9322,22 @@ function PricingPage({ user }) {
                 setCheckoutBusy(plan.id);
                 setCheckoutError("");
                 try {
-                  const session = await createCheckoutSession({
-                    userId: user.id,
-                    mode: "subscription",
-                    planId: plan.id,
-                  });
+                  const session = hasPaidPlan
+                    ? await createCustomerPortalSession(user.id)
+                    : await createCheckoutSession({
+                      userId: user.id,
+                      mode: "subscription",
+                      planId: plan.id,
+                    });
                   window.location.assign(session.url);
                 } catch (error) {
-                  setCheckoutError(error instanceof Error ? error.message : "決済ページの起動に失敗しました。");
+                  setCheckoutError(error instanceof Error ? error.message : hasPaidPlan ? "プラン変更ページの起動に失敗しました。" : "決済ページの起動に失敗しました。");
                 } finally {
                   setCheckoutBusy("");
                 }
               }}
             >
-              {user?.plan === plan.id ? "加入中" : checkoutBusy === plan.id ? "移動中..." : plan.cta}
+              {user?.plan === plan.id ? "加入中" : checkoutBusy === plan.id ? "移動中..." : hasPaidPlan ? "プラン変更を開く" : plan.cta}
             </Btn>
           </div>
         ))}
@@ -9737,7 +9740,26 @@ function SettingsPage({ user }) {
             <p style={{ fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.red }}>アカウント管理</p>
           </div>
           <div style={{ padding: "20px 24px", display: "flex", gap: 12 }}>
-            <Btn variant="ghost" size="sm">プランを変更</Btn>
+            <Btn
+              variant="ghost"
+              size="sm"
+              onClick={async () => {
+                if (!user?.id || portalBusy || !billingCustomer?.stripeCustomerId) return;
+                setPortalBusy(true);
+                setPortalError("");
+                try {
+                  const session = await createCustomerPortalSession(user.id);
+                  window.location.assign(session.url);
+                } catch (error) {
+                  setPortalError(error instanceof Error ? error.message : "請求管理ページを開けませんでした。");
+                } finally {
+                  setPortalBusy(false);
+                }
+              }}
+              disabled={portalBusy || !billingCustomer?.stripeCustomerId}
+            >
+              プランを変更
+            </Btn>
             <Btn
               variant="ghost"
               size="sm"

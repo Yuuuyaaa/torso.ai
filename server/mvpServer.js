@@ -290,6 +290,10 @@ function getPlanIdBySubscriptionPrice(priceId) {
   return Object.entries(SUBSCRIPTION_PRICE_BY_PLAN).find(([, value]) => value === priceId)?.[0] || "";
 }
 
+function getInvoiceLinePriceId(line) {
+  return String(line?.price?.id || line?.plan?.id || line?.pricing?.price_details?.price || "");
+}
+
 function parseBody(req) {
   return new Promise((resolveBody, rejectBody) => {
     let data = "";
@@ -924,7 +928,7 @@ function creditUserFromPack({ userId, packCode, orderId = "", stripePaymentInten
 
 function applySubscriptionInvoicePaid(invoice) {
   const line = Array.isArray(invoice?.lines?.data) ? invoice.lines.data[0] || null : null;
-  const priceId = String(line?.price?.id || "");
+  const priceId = getInvoiceLinePriceId(line);
   const planId = getPlanIdBySubscriptionPrice(priceId);
   const userId = String(line?.metadata?.user_id || invoice?.parent?.subscription_details?.metadata?.user_id || invoice?.metadata?.user_id || "");
   if (!userId || !planId) return;
@@ -932,7 +936,8 @@ function applySubscriptionInvoicePaid(invoice) {
   if (!user) return;
   user.plan = planId;
   user.credits = Number(PLAN_MONTHLY_CREDITS[planId] || 0);
-  const existingOrder = invoice.subscription ? findSubscriptionOrderBySubscriptionId(String(invoice.subscription)) : null;
+  const subscriptionId = String(invoice?.subscription || invoice?.parent?.subscription_details?.subscription || "");
+  const existingOrder = subscriptionId ? findSubscriptionOrderBySubscriptionId(subscriptionId) : null;
   if (existingOrder?.id) {
     updateSubscriptionOrder(existingOrder.id, {
       status: "active",
@@ -948,14 +953,14 @@ function applySubscriptionInvoicePaid(invoice) {
       billingEmail: String(invoice.customer_email || user.email || ""),
       payload: {
         source: "invoice.paid",
-        stripeSubscriptionId: String(invoice.subscription || ""),
+        stripeSubscriptionId: subscriptionId,
       },
     });
   }
   appendCreditEvent(userId, "subscription_cycle_reset", Number(PLAN_MONTHLY_CREDITS[planId] || 0), {
     planId,
     invoiceId: invoice.id,
-    stripeSubscriptionId: invoice.subscription || "",
+    stripeSubscriptionId: subscriptionId,
   });
   saveDb();
 }
@@ -1071,9 +1076,10 @@ function handleStripeWebhookEvent(eventPayload) {
   if (type === "invoice.payment_failed") {
     const line = Array.isArray(object?.lines?.data) ? object.lines.data[0] || null : null;
     const userId = String(line?.metadata?.user_id || object?.parent?.subscription_details?.metadata?.user_id || object?.metadata?.user_id || "");
-    const planId = getPlanIdBySubscriptionPrice(String(line?.price?.id || ""));
+    const planId = getPlanIdBySubscriptionPrice(getInvoiceLinePriceId(line));
     if (!userId) return;
-    const existingOrder = object.subscription ? findSubscriptionOrderBySubscriptionId(String(object.subscription)) : null;
+    const subscriptionId = String(object?.subscription || object?.parent?.subscription_details?.subscription || "");
+    const existingOrder = subscriptionId ? findSubscriptionOrderBySubscriptionId(subscriptionId) : null;
     if (existingOrder?.id) {
       updateSubscriptionOrder(existingOrder.id, {
         status: "failed",
@@ -1085,7 +1091,7 @@ function handleStripeWebhookEvent(eventPayload) {
     appendCreditEvent(userId, "subscription_payment_failed", 0, {
       planId,
       invoiceId: object.id,
-      stripeSubscriptionId: object.subscription || "",
+      stripeSubscriptionId: subscriptionId,
     });
     if (stripeEventId) {
       updateWebhookEventLog(stripeEventId, {
