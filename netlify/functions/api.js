@@ -128,6 +128,35 @@ const PLAN_MONTHLY_CREDITS = {
   custom: 2000,
 };
 
+function normalizeCreditSplit(row) {
+  const planId = String(row?.plan_id || "free").toLowerCase();
+  const totalCredits = Math.max(0, Number(row?.credits || 0));
+  const planMonthlyCredits = Math.max(0, Number(PLAN_MONTHLY_CREDITS[planId] || 0));
+  const rawSubscriptionCredits = Math.max(0, Number(row?.subscription_credits || 0));
+  const introPackEligible = Boolean(row?.intro_pack_eligible);
+
+  let subscriptionCredits = Math.min(rawSubscriptionCredits, totalCredits);
+  if (planId === "free" && totalCredits <= 0 && subscriptionCredits <= 0 && introPackEligible) {
+    subscriptionCredits = PLAN_MONTHLY_CREDITS.free;
+    return {
+      totalCredits: PLAN_MONTHLY_CREDITS.free,
+      subscriptionCredits,
+      purchasedCredits: 0,
+    };
+  }
+  // Backfill older/broken rows where monthly balance was not persisted,
+  // but total balance still clearly contains the full monthly allocation.
+  if (subscriptionCredits <= 0 && planMonthlyCredits > 0 && totalCredits >= planMonthlyCredits) {
+    subscriptionCredits = planMonthlyCredits;
+  }
+  subscriptionCredits = Math.min(subscriptionCredits, totalCredits);
+  return {
+    totalCredits,
+    subscriptionCredits,
+    purchasedCredits: Math.max(0, totalCredits - subscriptionCredits),
+  };
+}
+
 function compactTimestamp(source = null) {
   const d = source ? new Date(source) : new Date();
   const yyyy = d.getFullYear();
@@ -270,19 +299,15 @@ async function storageUpload(path, buffer, contentType) {
 
 function mapUser(row) {
   if (!row) return null;
-  const planId = String(row.plan_id || "free").toLowerCase();
-  const credits = Math.max(0, Number(row.credits || 0));
-  const subscriptionCredits = Math.max(0, Number(row.subscription_credits || 0));
-  const introPackEligible = Boolean(row.intro_pack_eligible);
-  const shouldBootstrapFreeCredit = planId === "free" && credits <= 0 && subscriptionCredits <= 0 && introPackEligible;
+  const creditState = normalizeCreditSplit(row);
   return {
     id: row.user_id,
     email: row.email || "",
     name: row.display_name || "",
     plan: row.plan_id || "free",
-    credits: shouldBootstrapFreeCredit ? PLAN_MONTHLY_CREDITS.free : credits,
-    subscriptionCredits: shouldBootstrapFreeCredit ? PLAN_MONTHLY_CREDITS.free : subscriptionCredits,
-    introPackEligible,
+    credits: creditState.totalCredits,
+    subscriptionCredits: creditState.subscriptionCredits,
+    introPackEligible: Boolean(row.intro_pack_eligible),
     createdAt: row.created_at || nowIso(),
   };
 }
@@ -1413,11 +1438,11 @@ async function appendAssetLibraryEvents(userId, previousLibrary = {}, nextLibrar
 }
 
 function getSubscriptionCreditBalance(user) {
-  return Math.max(0, Number(user?.subscription_credits || 0));
+  return normalizeCreditSplit(user).subscriptionCredits;
 }
 
 function getPurchasedCreditBalance(user) {
-  return Math.max(0, Number(user?.credits || 0) - getSubscriptionCreditBalance(user));
+  return normalizeCreditSplit(user).purchasedCredits;
 }
 
 async function updateUserCredits(userId, nextCredits) {
@@ -1471,8 +1496,9 @@ async function applySubscriptionCreditAllocation(userId, planId) {
 async function reserveUserCredits(userId, amount) {
   const user = await getUserById(userId);
   if (!user) throw new Error("user not found");
-  const totalCredits = Number(user.credits || 0);
-  const subscriptionCredits = getSubscriptionCreditBalance(user);
+  const creditState = normalizeCreditSplit(user);
+  const totalCredits = creditState.totalCredits;
+  const subscriptionCredits = creditState.subscriptionCredits;
   const reserveAmount = Number(amount || 0);
   if (totalCredits < reserveAmount) {
     throw new Error(`insufficient credits: need ${reserveAmount}, have ${totalCredits}`);

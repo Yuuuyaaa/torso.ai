@@ -186,25 +186,39 @@ const PLAN_MONTHLY_CREDITS = {
   custom: 2000,
 };
 
+function normalizeCreditSplit(user) {
+  const planId = String(user?.plan || "free").toLowerCase();
+  const totalCredits = Math.max(0, Number(user?.credits || 0));
+  const planMonthlyCredits = Math.max(0, Number(PLAN_MONTHLY_CREDITS[planId] || 0));
+  const rawSubscriptionCredits = Math.max(0, Number(user?.subscriptionCredits || 0));
+  const introPackEligible = user?.introPackEligible !== false;
+
+  let subscriptionCredits = Math.min(rawSubscriptionCredits, totalCredits);
+  if (planId === "free" && totalCredits <= 0 && subscriptionCredits <= 0 && introPackEligible) {
+    subscriptionCredits = PLAN_MONTHLY_CREDITS.free;
+    return {
+      totalCredits: PLAN_MONTHLY_CREDITS.free,
+      subscriptionCredits,
+      purchasedCredits: 0,
+    };
+  }
+  if (subscriptionCredits <= 0 && planMonthlyCredits > 0 && totalCredits >= planMonthlyCredits) {
+    subscriptionCredits = planMonthlyCredits;
+  }
+  subscriptionCredits = Math.min(subscriptionCredits, totalCredits);
+  return {
+    totalCredits,
+    subscriptionCredits,
+    purchasedCredits: Math.max(0, totalCredits - subscriptionCredits),
+  };
+}
+
 function normalizeLocalUserRecord(user) {
   const next = { ...(user || {}) };
-  const planId = String(next.plan || "free").toLowerCase();
-  const credits = Math.max(0, Number(next.credits || 0));
-  const computedSubscriptionCredits = Number(
-    next?.subscriptionCredits
-    ?? Math.min(credits, Number(PLAN_MONTHLY_CREDITS[planId] || 0)),
-  );
-  next.credits = credits;
-  next.subscriptionCredits = Math.max(0, computedSubscriptionCredits);
-  if (
-    planId === "free"
-    && !next.freeCreditBootstrapped
-    && credits <= 0
-    && next.subscriptionCredits <= 0
-    && next.introPackEligible !== false
-  ) {
-    next.credits = 1;
-    next.subscriptionCredits = 1;
+  const creditState = normalizeCreditSplit(next);
+  next.credits = creditState.totalCredits;
+  next.subscriptionCredits = creditState.subscriptionCredits;
+  if (String(next.plan || "free").toLowerCase() === "free" && next.introPackEligible !== false) {
     next.freeCreditBootstrapped = true;
   }
   return next;
@@ -909,11 +923,11 @@ function appendCreditEvent(userId, type, delta, payload = {}) {
 }
 
 function getSubscriptionCreditBalance(user) {
-  return Math.max(0, Number(user?.subscriptionCredits || 0));
+  return normalizeCreditSplit(user).subscriptionCredits;
 }
 
 function getPurchasedCreditBalance(user) {
-  return Math.max(0, Number(user?.credits || 0) - getSubscriptionCreditBalance(user));
+  return normalizeCreditSplit(user).purchasedCredits;
 }
 
 function applySubscriptionCreditAllocationLocal(user, planId) {
