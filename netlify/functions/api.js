@@ -199,6 +199,13 @@ async function supabaseRequest(path, { method = "GET", body, headers = {} } = {}
   return data;
 }
 
+function isMissingAssetLibraryCountColumnError(error) {
+  const message = String(error instanceof Error ? error.message : error || "").toLowerCase();
+  return message.includes("studio_count")
+    || message.includes("model_count")
+    || message.includes("product_count");
+}
+
 function requireStripe() {
   if (!STRIPE_SECRET_KEY) {
     throw new Error("STRIPE_SECRET_KEY is missing");
@@ -814,7 +821,13 @@ async function findOrCreateGoogleUser(authUser) {
 }
 
 async function ensureAssetLibrary(userId) {
-  const rows = await supabaseRequest(`/app_asset_libraries?user_id=eq.${encodeURIComponent(userId)}&select=user_id,studio_assets,model_assets,product_assets,studio_count,model_count,product_count&limit=1`);
+  let rows;
+  try {
+    rows = await supabaseRequest(`/app_asset_libraries?user_id=eq.${encodeURIComponent(userId)}&select=user_id,studio_assets,model_assets,product_assets,studio_count,model_count,product_count&limit=1`);
+  } catch (error) {
+    if (!isMissingAssetLibraryCountColumnError(error)) throw error;
+    rows = await supabaseRequest(`/app_asset_libraries?user_id=eq.${encodeURIComponent(userId)}&select=user_id,studio_assets,model_assets,product_assets&limit=1`);
+  }
   const row = Array.isArray(rows) ? rows[0] || null : null;
   if (row) {
     const counts = buildAssetLibraryCounts({
@@ -833,18 +846,32 @@ async function ensureAssetLibrary(userId) {
       },
     };
   }
-  const created = await supabaseRequest("/app_asset_libraries", {
-    method: "POST",
-    body: {
-      user_id: userId,
-      studio_assets: [],
-      model_assets: [],
-      product_assets: [],
-      studio_count: 0,
-      model_count: 0,
-      product_count: 0,
-    },
-  });
+  let created;
+  try {
+    created = await supabaseRequest("/app_asset_libraries", {
+      method: "POST",
+      body: {
+        user_id: userId,
+        studio_assets: [],
+        model_assets: [],
+        product_assets: [],
+        studio_count: 0,
+        model_count: 0,
+        product_count: 0,
+      },
+    });
+  } catch (error) {
+    if (!isMissingAssetLibraryCountColumnError(error)) throw error;
+    created = await supabaseRequest("/app_asset_libraries", {
+      method: "POST",
+      body: {
+        user_id: userId,
+        studio_assets: [],
+        model_assets: [],
+        product_assets: [],
+      },
+    });
+  }
   const next = Array.isArray(created) ? created[0] || null : null;
   return {
     studio: Array.isArray(next?.studio_assets) ? next.studio_assets : [],
@@ -2171,11 +2198,26 @@ export async function handler(event) {
         model_count: counts.modelCount,
         product_count: counts.productCount,
       };
-      const rows = await supabaseRequest("/app_asset_libraries?on_conflict=user_id", {
-        method: "POST",
-        headers: { Prefer: "resolution=merge-duplicates,return=representation" },
-        body: next,
-      });
+      let rows;
+      try {
+        rows = await supabaseRequest("/app_asset_libraries?on_conflict=user_id", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+          body: next,
+        });
+      } catch (error) {
+        if (!isMissingAssetLibraryCountColumnError(error)) throw error;
+        rows = await supabaseRequest("/app_asset_libraries?on_conflict=user_id", {
+          method: "POST",
+          headers: { Prefer: "resolution=merge-duplicates,return=representation" },
+          body: {
+            user_id: userId,
+            studio_assets: compacted.studio,
+            model_assets: compacted.models,
+            product_assets: compacted.products,
+          },
+        });
+      }
       const row = Array.isArray(rows) ? rows[0] || null : null;
       await appendAssetLibraryEvents(userId, previousLibrary, compacted);
       return json(200, {

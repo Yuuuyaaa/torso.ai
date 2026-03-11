@@ -178,13 +178,37 @@ const SUBSCRIPTION_PRICE_BY_PLAN = {
   enterprise: STRIPE_PRICE_ENTERPRISE_MONTHLY,
 };
 const PLAN_MONTHLY_CREDITS = {
-  free: 0,
+  free: 1,
   starter: 30,
   growth: 200,
   business: 800,
   enterprise: 2000,
   custom: 2000,
 };
+
+function normalizeLocalUserRecord(user) {
+  const next = { ...(user || {}) };
+  const planId = String(next.plan || "free").toLowerCase();
+  const credits = Math.max(0, Number(next.credits || 0));
+  const computedSubscriptionCredits = Number(
+    next?.subscriptionCredits
+    ?? Math.min(credits, Number(PLAN_MONTHLY_CREDITS[planId] || 0)),
+  );
+  next.credits = credits;
+  next.subscriptionCredits = Math.max(0, computedSubscriptionCredits);
+  if (
+    planId === "free"
+    && !next.freeCreditBootstrapped
+    && credits <= 0
+    && next.subscriptionCredits <= 0
+    && next.introPackEligible !== false
+  ) {
+    next.credits = 1;
+    next.subscriptionCredits = 1;
+    next.freeCreditBootstrapped = true;
+  }
+  return next;
+}
 
 const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".webp", ".heic", ".heif"]);
 
@@ -204,13 +228,7 @@ function loadDb() {
     const parsed = JSON.parse(raw);
     return {
       users: Array.isArray(parsed.users)
-        ? parsed.users.map((user) => ({
-          ...user,
-          subscriptionCredits: Number(
-            user?.subscriptionCredits
-            ?? Math.min(Number(user?.credits || 0), Number(PLAN_MONTHLY_CREDITS[String(user?.plan || "free").toLowerCase()] || 0)),
-          ),
-        }))
+        ? parsed.users.map((user) => normalizeLocalUserRecord(user))
         : [],
       jobs: Array.isArray(parsed.jobs) ? parsed.jobs : [],
       jobEvents: Array.isArray(parsed.jobEvents) ? parsed.jobEvents : [],
@@ -604,13 +622,29 @@ async function supabaseRequest(path, options = {}) {
   return data;
 }
 
+function isMissingAssetLibraryCountColumnError(error) {
+  const message = String(error instanceof Error ? error.message : error || "").toLowerCase();
+  return message.includes("studio_count")
+    || message.includes("model_count")
+    || message.includes("product_count");
+}
+
 async function readAssetLibrary(userId) {
   if (!userId) return { studio: [], models: [], products: [] };
   if (hasSupabaseConfig()) {
-    const rows = await supabaseRequest(
-      `/app_asset_libraries?user_id=eq.${encodeURIComponent(userId)}&select=studio_assets,model_assets,product_assets,studio_count,model_count,product_count&limit=1`,
-      { method: "GET" },
-    );
+    let rows;
+    try {
+      rows = await supabaseRequest(
+        `/app_asset_libraries?user_id=eq.${encodeURIComponent(userId)}&select=studio_assets,model_assets,product_assets,studio_count,model_count,product_count&limit=1`,
+        { method: "GET" },
+      );
+    } catch (error) {
+      if (!isMissingAssetLibraryCountColumnError(error)) throw error;
+      rows = await supabaseRequest(
+        `/app_asset_libraries?user_id=eq.${encodeURIComponent(userId)}&select=studio_assets,model_assets,product_assets&limit=1`,
+        { method: "GET" },
+      );
+    }
     const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
     if (!row) return { studio: [], models: [], products: [] };
     const normalized = normalizeAssetLibraryPayload({
@@ -650,7 +684,7 @@ async function writeAssetLibrary(userId, payload) {
     productCount: compacted.products.length,
   };
   if (hasSupabaseConfig()) {
-    const body = [{
+    const bodyWithCounts = [{
       user_id: userId,
       studio_assets: compacted.studio,
       model_assets: compacted.models,
@@ -659,13 +693,31 @@ async function writeAssetLibrary(userId, payload) {
       model_count: counts.modelCount,
       product_count: counts.productCount,
     }];
-    const rows = await supabaseRequest("/app_asset_libraries?on_conflict=user_id", {
-      method: "POST",
-      headers: {
-        Prefer: "resolution=merge-duplicates,return=representation",
-      },
-      body: JSON.stringify(body),
-    });
+    const bodyWithoutCounts = [{
+      user_id: userId,
+      studio_assets: compacted.studio,
+      model_assets: compacted.models,
+      product_assets: compacted.products,
+    }];
+    let rows;
+    try {
+      rows = await supabaseRequest("/app_asset_libraries?on_conflict=user_id", {
+        method: "POST",
+        headers: {
+          Prefer: "resolution=merge-duplicates,return=representation",
+        },
+        body: JSON.stringify(bodyWithCounts),
+      });
+    } catch (error) {
+      if (!isMissingAssetLibraryCountColumnError(error)) throw error;
+      rows = await supabaseRequest("/app_asset_libraries?on_conflict=user_id", {
+        method: "POST",
+        headers: {
+          Prefer: "resolution=merge-duplicates,return=representation",
+        },
+        body: JSON.stringify(bodyWithoutCounts),
+      });
+    }
     const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
     if (!row) return compacted;
     const normalizedRow = normalizeAssetLibraryPayload({
@@ -3570,9 +3622,10 @@ const server = createServer(async (req, res) => {
         password,
         name: "",
         plan: "free",
-        credits: 0,
-        subscriptionCredits: 0,
+        credits: PLAN_MONTHLY_CREDITS.free,
+        subscriptionCredits: PLAN_MONTHLY_CREDITS.free,
         introPackEligible: true,
+        freeCreditBootstrapped: true,
         createdAt: nowIso(),
       };
       db.users.push(user);
@@ -3623,9 +3676,10 @@ const server = createServer(async (req, res) => {
             || ""
           ).trim(),
           plan: "free",
-          credits: 0,
-          subscriptionCredits: 0,
+          credits: PLAN_MONTHLY_CREDITS.free,
+          subscriptionCredits: PLAN_MONTHLY_CREDITS.free,
           introPackEligible: true,
+          freeCreditBootstrapped: true,
           createdAt: nowIso(),
         };
         db.users.push(user);

@@ -10044,6 +10044,7 @@ export default function App() {
   const [route, setRoute] = useState(() => window.location.pathname || "/");
   const [isMobile, setIsMobile] = useState(() => window.innerWidth <= MOBILE_BREAKPOINT);
   const [user, setUser] = useState(null);
+  const [authScreenError, setAuthScreenError] = useState("");
   const [jobs, setJobs] = useState([]);
   const [studioAssets, setStudioAssets] = useState([]);
   const [modelAssets, setModelAssets] = useState([]);
@@ -10080,6 +10081,7 @@ export default function App() {
   const refreshData = useCallback(async ({ preferCache = false, userHint = null } = {}) => {
     if (!preferCache) setAssetLibraryReady(false);
     try {
+      setAuthScreenError("");
       const currentUser = userHint || await getCurrentUser();
       setUser(currentUser);
       if (currentUser) {
@@ -10205,7 +10207,16 @@ export default function App() {
       }
     } catch (error) {
       console.error("[refreshData] failed", error);
+      const message = error instanceof Error ? error.message : "データ取得に失敗しました。";
+      setUser(null);
+      setJobs([]);
+      setCreditHistory([]);
+      setStudioAssets([]);
+      setModelAssets([]);
+      setProductAssets([]);
+      hasLoadedRemoteAssetLibraryRef.current = false;
       setAssetLibraryReady(false);
+      setAuthScreenError(message);
     } finally {
       setLoading(false);
     }
@@ -10380,11 +10391,12 @@ export default function App() {
   if (route === "/login" || route === "/signup") return (
     <>
       <GlobalStyles />
-      <LoginPage
-        defaultTab={route === "/signup" ? "signup" : "login"}
-        onLogin={async ({ email, password }) => {
-          const loggedInUser = await login({ email, password });
-          await refreshData({ preferCache: true, userHint: loggedInUser });
+        <LoginPage
+          defaultTab={route === "/signup" ? "signup" : "login"}
+          initialError={authScreenError}
+          onLogin={async ({ email, password }) => {
+            const loggedInUser = await login({ email, password });
+            await refreshData({ preferCache: true, userHint: loggedInUser });
           navigate("/app");
         }}
         onSignup={async ({ email, password }) => {
@@ -10415,6 +10427,7 @@ export default function App() {
         <GlobalStyles />
         <LoginPage
           defaultTab="login"
+          initialError={authScreenError}
           onLogin={async ({ email, password }) => {
             const loggedInUser = await login({ email, password });
             await refreshData({ preferCache: true, userHint: loggedInUser });

@@ -11,7 +11,7 @@ const USE_BACKEND_API = import.meta.env.VITE_USE_BACKEND_API !== "false";
 const BACKEND_BASE_URL = (EXPLICIT_BACKEND_BASE_URL || DEFAULT_BACKEND_BASE_URL).replace(/\/$/, "");
 
 const PLAN_DEFS = {
-  free: { label: "Free", monthlyCredits: 0 },
+  free: { label: "Free", monthlyCredits: 1 },
   starter: { label: "Starter", monthlyCredits: 30 },
   growth: { label: "Growth", monthlyCredits: 200 },
   business: { label: "Business", monthlyCredits: 800 },
@@ -393,11 +393,24 @@ export async function login({ email, password }) {
       setApiMode("backend");
       return data.user;
     } catch (error) {
-      throw new Error(
-        error instanceof Error
-          ? `APIサーバーに接続できません: ${error.message}`
-          : "APIサーバーに接続できません。`npm run api` を確認してください。",
-      );
+      const message = String(error instanceof Error ? error.message : error || "");
+      const lower = message.toLowerCase();
+      const isNetworkFailure = lower.includes("failed to fetch")
+        || lower.includes("networkerror")
+        || lower.includes("load failed")
+        || lower.includes("api error 502")
+        || lower.includes("api error 503")
+        || lower.includes("api error 504");
+      if (isNetworkFailure) {
+        throw new Error(`APIサーバーに接続できません: ${message || "Failed to fetch"}`);
+      }
+      if (lower.includes("account not found")) {
+        throw new Error("アカウントが存在しません。新規登録してください。");
+      }
+      if (lower.includes("invalid email or password") || lower.includes("api error 401")) {
+        throw new Error("メールアドレスまたはパスワードが正しくありません。");
+      }
+      throw error instanceof Error ? error : new Error(message || "ログインに失敗しました。");
     }
   }
 
