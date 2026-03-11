@@ -6789,6 +6789,8 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
   const [selectionMode, setSelectionMode] = useState(false);
   const [draggingProduct, setDraggingProduct] = useState(false);
   const [uploadError, setUploadError] = useState("");
+  const [confirmProductDeleteOpen, setConfirmProductDeleteOpen] = useState(false);
+  const [pendingDeleteAssetIds, setPendingDeleteAssetIds] = useState([]);
 
   const addAssets = useCallback(async (newFiles) => {
     const imageFiles = (newFiles || []).filter((file) => (
@@ -7004,6 +7006,25 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
     setSelectionMode(false);
     setSelectedAssetIds([]);
   }, []);
+  const openDeleteConfirm = useCallback((assetIds) => {
+    const ids = Array.isArray(assetIds) ? assetIds.filter(Boolean) : [];
+    if (ids.length === 0) return;
+    setPendingDeleteAssetIds(ids);
+    setConfirmProductDeleteOpen(true);
+  }, []);
+  const closeDeleteConfirm = useCallback(() => {
+    setConfirmProductDeleteOpen(false);
+    setPendingDeleteAssetIds([]);
+  }, []);
+  const confirmDeleteProducts = useCallback(() => {
+    if (pendingDeleteAssetIds.length === 0) return;
+    removeAssets(pendingDeleteAssetIds);
+    setSelectionMode(false);
+    closeDeleteConfirm();
+    if (currentViewerItem && pendingDeleteAssetIds.includes(currentViewerItem.id)) {
+      closeViewer();
+    }
+  }, [closeDeleteConfirm, closeViewer, currentViewerItem, pendingDeleteAssetIds, removeAssets]);
 
   return (
     <div className="fade-up">
@@ -7125,10 +7146,7 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
                       variant="secondary"
                       onClick={() => {
                         if (selectedAssetIds.length === 0) return;
-                        if (window.confirm(`選択した ${selectedAssetIds.length} 件の商品画像を削除しますか？`)) {
-                          removeAssets(selectedAssetIds);
-                          setSelectionMode(false);
-                        }
+                        openDeleteConfirm(selectedAssetIds);
                       }}
                       disabled={selectedAssetIds.length === 0}
                     >
@@ -7353,10 +7371,7 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
                     variant="ghost"
                     onClick={() => {
                       if (!currentViewerItem) return;
-                      if (window.confirm("この商品画像を削除しますか？")) {
-                        removeAssets([currentViewerItem.id]);
-                        closeViewer();
-                      }
+                      openDeleteConfirm([currentViewerItem.id]);
                     }}
                   >
                     削除
@@ -7459,6 +7474,34 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
             </div>
           </div>
         </div>
+        {confirmProductDeleteOpen && (
+          <div
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(17,17,17,0.32)",
+              display: "grid",
+              placeItems: "center",
+              padding: 20,
+              zIndex: 80,
+            }}
+          >
+            <div style={{ width: "min(420px, 100%)", background: C.surface, border: `1px solid ${C.border}`, padding: 22 }}>
+              <h3 style={{ fontFamily: SERIF, fontSize: 22, fontWeight: 500, color: C.text, marginBottom: 8 }}>
+                {pendingDeleteAssetIds.length > 1 ? "商品画像を削除しますか？" : "この商品画像を削除しますか？"}
+              </h3>
+              <p style={{ fontSize: 13, color: C.textSub, lineHeight: 1.7, marginBottom: 18 }}>
+                {pendingDeleteAssetIds.length > 1
+                  ? `選択した ${pendingDeleteAssetIds.length} 件を削除します。削除した画像は元に戻せません。`
+                  : "削除した画像は元に戻せません。"}
+              </p>
+              <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+                <Btn size="sm" variant="ghost" onClick={closeDeleteConfirm}>キャンセル</Btn>
+                <Btn size="sm" variant="secondary" onClick={confirmDeleteProducts}>削除する</Btn>
+              </div>
+            </div>
+          </div>
+        )}
       ), document.body)}
     </div>
   );
