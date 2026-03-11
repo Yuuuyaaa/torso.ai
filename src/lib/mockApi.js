@@ -963,6 +963,24 @@ export async function createCustomerPortalSession(userId) {
   return data;
 }
 
+export async function changeSubscriptionPlan(userId, targetPlanId) {
+  if (!userId) throw new Error("userId is required");
+  if (!shouldUseBackend()) {
+    throw new Error("プラン変更はバックエンド接続時のみ利用できます。");
+  }
+  const normalizedPlanId = String(targetPlanId || "").trim().toLowerCase();
+  if (!normalizedPlanId) throw new Error("targetPlanId is required");
+  const data = await backendRequest("/api/billing/change-plan", {
+    method: "POST",
+    body: JSON.stringify({
+      userId,
+      targetPlanId: normalizedPlanId,
+    }),
+  });
+  if (!data?.user) throw new Error("updated user missing");
+  return data;
+}
+
 export async function listActiveJobs(userId) {
   const jobs = await listJobs(userId);
   return jobs.filter((job) => job.status === "queued" || job.status === "processing");
@@ -1187,7 +1205,7 @@ export async function createCheckoutSession({ userId, mode, planId = "", packCod
     method: "POST",
     body: JSON.stringify(payload),
   });
-  if (!data?.url) throw new Error("checkout url missing");
+  if (!data?.url && !data?.user) throw new Error("checkout response missing");
   return data;
 }
 

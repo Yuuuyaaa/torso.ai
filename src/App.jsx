@@ -21,6 +21,7 @@ import {
   retryJob,
   saveAssetLibrary,
   signup,
+  changeSubscriptionPlan,
   createCustomerPortalSession,
   createCheckoutSession,
   startDemoSession,
@@ -140,6 +141,69 @@ function MobileFixedLayer({ active = false, children }) {
   const root = typeof document !== "undefined" ? document.body : null;
   if (!active || !root) return children;
   return createPortal(children, root);
+}
+
+function BillingConfirmModal({
+  open = false,
+  title = "",
+  body = "",
+  amountLabel = "",
+  confirmLabel = "確定する",
+  cardLabel = "",
+  note = "",
+  busy = false,
+  onCancel,
+  onConfirm,
+}) {
+  const root = typeof document !== "undefined" ? document.body : null;
+  if (!open || !root) return null;
+  return createPortal(
+    (
+      <div
+        onClick={() => {
+          if (!busy) onCancel?.();
+        }}
+        style={{
+          position: "fixed",
+          inset: 0,
+          zIndex: 3000,
+          background: "rgba(26, 21, 15, 0.52)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: 24,
+        }}
+      >
+        <div
+          onClick={(e) => e.stopPropagation()}
+          style={{
+            width: "min(520px, 100%)",
+            background: C.surface,
+            border: `1px solid ${C.border}`,
+            boxShadow: "0 22px 60px rgba(29, 23, 16, 0.18)",
+            padding: 28,
+          }}
+        >
+          <p style={{ fontSize: 10, letterSpacing: "0.14em", textTransform: "uppercase", color: C.gold, marginBottom: 10 }}>Billing</p>
+          <p style={{ fontFamily: SERIF, fontSize: 28, color: C.text, marginBottom: 12 }}>{title}</p>
+          <p style={{ fontSize: 13, color: C.textMid, lineHeight: 1.85, marginBottom: 18, whiteSpace: "pre-line" }}>{body}</p>
+          <div style={{ border: `1px solid ${C.borderLight}`, background: C.bg, padding: 16, marginBottom: 14 }}>
+            <p style={{ fontSize: 11, color: C.textSub, letterSpacing: "0.08em", textTransform: "uppercase", marginBottom: 8 }}>今回の決済</p>
+            <p style={{ fontSize: 22, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums", marginBottom: 8 }}>{amountLabel}</p>
+            <p style={{ fontSize: 12, color: C.textMid }}>{cardLabel || "登録済みの支払い方法で決済します。"}</p>
+          </div>
+          {note ? (
+            <p style={{ fontSize: 12, color: C.textMid, lineHeight: 1.75, marginBottom: 20, whiteSpace: "pre-line" }}>{note}</p>
+          ) : null}
+          <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
+            <Btn variant="ghost" size="sm" onClick={onCancel} disabled={busy}>戻る</Btn>
+            <Btn size="sm" onClick={onConfirm} disabled={busy}>{busy ? "処理中..." : confirmLabel}</Btn>
+          </div>
+        </div>
+      </div>
+    ),
+    root,
+  );
 }
 
 // ─────────────────────────────────────────────
@@ -9143,12 +9207,19 @@ const PLANS = [
   },
 ];
 
-function PricingPage({ user }) {
+function PricingPage({ user, onUserUpdate }) {
   const [billingCycle, setBillingCycle] = useState("monthly");
   const formatYen = useCallback((value) => `¥${Number(value || 0).toLocaleString("ja-JP")}`, []);
   const [checkoutBusy, setCheckoutBusy] = useState("");
   const [checkoutError, setCheckoutError] = useState("");
+  const [billingCustomer, setBillingCustomer] = useState(null);
+  const [confirmPlan, setConfirmPlan] = useState(null);
   const hasPaidPlan = ["starter", "growth", "business", "enterprise"].includes(String(user?.plan || "").toLowerCase());
+  const hasSavedCard = Boolean(
+    billingCustomer?.defaultPaymentMethodId
+    || billingCustomer?.payload?.cardLast4
+    || billingCustomer?.stripeCustomerId,
+  );
   const topupRows = [
     { planId: "free", label: "Free 初回限定", note: "最初の1回のみ", offer: getCreditPackOffers("free", true)[0] },
     { planId: "free-repeat", label: "Free 通常追加", note: "2回目以降", offer: getCreditPackOffers("free", false)[0] },
@@ -9157,6 +9228,36 @@ function PricingPage({ user }) {
     { planId: "business", label: "Business", note: "加入中のみ", offer: getCreditPackOffers("business")[0] },
     { planId: "enterprise", label: "Enterprise", note: "加入中のみ", offer: getCreditPackOffers("enterprise")[0] },
   ];
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!user?.id) {
+      setBillingCustomer(null);
+      return undefined;
+    }
+    getBillingHistory(user.id)
+      .then((data) => {
+        if (!cancelled) setBillingCustomer(data?.billingCustomer || null);
+      })
+      .catch(() => {
+        if (!cancelled) setBillingCustomer(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  const getMonthlyPrice = useCallback((planId) => {
+    const plan = PLANS.find((item) => item.id === planId);
+    return Number(plan?.monthlyPrice || 0);
+  }, []);
+  const cardLabel = useMemo(() => {
+    const brand = String(billingCustomer?.payload?.cardBrand || "").toUpperCase();
+    const last4 = String(billingCustomer?.payload?.cardLast4 || "");
+    if (brand && last4) return `${brand} •••• ${last4} で決済します。`;
+    if (last4) return `登録済みのカード（•••• ${last4}）で決済します。`;
+    return "以前の決済に使ったカードでそのまま決済します。";
+  }, [billingCustomer?.payload?.cardBrand, billingCustomer?.payload?.cardLast4]);
 
   return (
     <div className="fade-up">
@@ -9319,17 +9420,23 @@ function PricingPage({ user }) {
               disabled={checkoutBusy === plan.id || user?.plan === plan.id}
               onClick={async () => {
                 if (!user?.id || user?.plan === plan.id) return;
-                setCheckoutBusy(plan.id);
                 setCheckoutError("");
+                if (hasSavedCard) {
+                  setConfirmPlan(plan.id);
+                  return;
+                }
+                setCheckoutBusy(plan.id);
                 try {
-                  const session = hasPaidPlan
-                    ? await createCustomerPortalSession(user.id)
-                    : await createCheckoutSession({
-                      userId: user.id,
-                      mode: "subscription",
-                      planId: plan.id,
-                    });
-                  window.location.assign(session.url);
+                  const result = await createCheckoutSession({
+                    userId: user.id,
+                    mode: "subscription",
+                    planId: plan.id,
+                  });
+                  if (result?.user) {
+                    onUserUpdate?.(result.user);
+                  } else if (result?.url) {
+                    window.location.assign(result.url);
+                  }
                 } catch (error) {
                   setCheckoutError(error instanceof Error ? error.message : hasPaidPlan ? "プラン変更ページの起動に失敗しました。" : "決済ページの起動に失敗しました。");
                 } finally {
@@ -9337,7 +9444,7 @@ function PricingPage({ user }) {
                 }
               }}
             >
-              {user?.plan === plan.id ? "加入中" : checkoutBusy === plan.id ? "移動中..." : hasPaidPlan ? "プラン変更を開く" : plan.cta}
+              {user?.plan === plan.id ? "加入中" : checkoutBusy === plan.id ? "移動中..." : hasPaidPlan ? "このプランに変更" : plan.cta}
             </Btn>
           </div>
         ))}
@@ -9369,6 +9476,63 @@ function PricingPage({ user }) {
           <p style={{ fontSize: 12, color: C.red, marginTop: 14 }}>{checkoutError}</p>
         ) : null}
       </div>
+      <BillingConfirmModal
+        open={Boolean(confirmPlan)}
+        title={confirmPlan ? `${getPlanLabel(confirmPlan)} に変更` : ""}
+        body={
+          confirmPlan
+            ? (
+              hasPaidPlan
+                ? `月額プランを ${getPlanLabel(user?.plan)} から ${getPlanLabel(confirmPlan)} に変更します。`
+                : `${getPlanLabel(confirmPlan)} へ加入します。`
+            )
+            : ""
+        }
+        amountLabel={confirmPlan ? `${formatYen(getMonthlyPrice(confirmPlan))} / 月` : ""}
+        cardLabel={cardLabel}
+        note={
+          confirmPlan
+            ? (
+              hasPaidPlan
+                ? `変更は即時反映されます。\n未使用期間分と新プラン料金は Stripe の日割り計算で調整され、差額がすぐに請求または充当されます。`
+                : `登録済みカードで初回の月額料金を決済します。\nカード番号の再入力は不要です。`
+            )
+            : ""
+        }
+        confirmLabel={hasPaidPlan ? "この内容で変更" : "この内容で加入"}
+        busy={Boolean(confirmPlan && checkoutBusy === confirmPlan)}
+        onCancel={() => {
+          if (!checkoutBusy) setConfirmPlan(null);
+        }}
+        onConfirm={async () => {
+          if (!confirmPlan || !user?.id) return;
+          setCheckoutBusy(confirmPlan);
+          setCheckoutError("");
+          try {
+            if (hasPaidPlan) {
+              const result = await changeSubscriptionPlan(user.id, confirmPlan);
+              onUserUpdate?.(result.user);
+            } else {
+              const result = await createCheckoutSession({
+                userId: user.id,
+                mode: "subscription",
+                planId: confirmPlan,
+              });
+              if (result?.user) {
+                onUserUpdate?.(result.user);
+              } else if (result?.url) {
+                window.location.assign(result.url);
+                return;
+              }
+            }
+            setConfirmPlan(null);
+          } catch (error) {
+            setCheckoutError(error instanceof Error ? error.message : "決済ページの起動に失敗しました。");
+          } finally {
+            setCheckoutBusy("");
+          }
+        }}
+      />
     </div>
   );
 }
@@ -9376,7 +9540,7 @@ function PricingPage({ user }) {
 // ─────────────────────────────────────────────
 // PAGE: SETTINGS
 // ─────────────────────────────────────────────
-function SettingsPage({ user }) {
+function SettingsPage({ user, setPage, onUserUpdate }) {
   const [notifications, setNotifications] = useState(true);
   const [autoDownload, setAutoDownload] = useState(false);
   const [quality, setQuality] = useState("high");
@@ -9392,6 +9556,7 @@ function SettingsPage({ user }) {
   const [billingCustomer, setBillingCustomer] = useState(null);
   const [creditPackOrders, setCreditPackOrders] = useState([]);
   const [subscriptionOrders, setSubscriptionOrders] = useState([]);
+  const [confirmTopupOpen, setConfirmTopupOpen] = useState(false);
 
   const formatDateTime = useCallback(
     (value) => {
@@ -9441,6 +9606,25 @@ function SettingsPage({ user }) {
       .sort((a, b) => +new Date(b.createdAt || 0) - +new Date(a.createdAt || 0))
       .slice(0, 8)
   ), [creditPackOrders, subscriptionOrders]);
+  const portalReady = useMemo(
+    () => Boolean(
+      billingCustomer?.stripeCustomerId
+      || subscriptionOrders.some((order) => String(order?.stripeCustomerId || "").trim()),
+    ),
+    [billingCustomer?.stripeCustomerId, subscriptionOrders],
+  );
+  const hasSavedCard = Boolean(
+    billingCustomer?.defaultPaymentMethodId
+    || billingCustomer?.payload?.cardLast4
+    || billingCustomer?.stripeCustomerId,
+  );
+  const cardLabel = useMemo(() => {
+    const brand = String(billingCustomer?.payload?.cardBrand || "").toUpperCase();
+    const last4 = String(billingCustomer?.payload?.cardLast4 || "");
+    if (brand && last4) return `${brand} •••• ${last4} で決済します。`;
+    if (last4) return `登録済みのカード（•••• ${last4}）で決済します。`;
+    return "以前の決済に使ったカードでそのまま決済します。";
+  }, [billingCustomer?.payload?.cardBrand, billingCustomer?.payload?.cardLast4]);
 
   const billingStatusMeta = useCallback((status) => {
     const normalized = String(status || "").toLowerCase();
@@ -9548,15 +9732,23 @@ function SettingsPage({ user }) {
                     size="sm"
                     onClick={async () => {
                       if (!user?.id || !currentOffer || topupBusy) return;
+                      if (hasSavedCard) {
+                        setConfirmTopupOpen(true);
+                        return;
+                      }
                       setTopupBusy(true);
                       setTopupError("");
                       try {
-                        const session = await createCheckoutSession({
+                        const result = await createCheckoutSession({
                           userId: user.id,
                           mode: "payment",
                           packCode: currentOffer.id,
                         });
-                        window.location.assign(session.url);
+                        if (result?.user) {
+                          onUserUpdate?.(result.user);
+                        } else if (result?.url) {
+                          window.location.assign(result.url);
+                        }
                       } catch (error) {
                         setTopupError(error instanceof Error ? error.message : "決済ページの起動に失敗しました。");
                       } finally {
@@ -9587,29 +9779,9 @@ function SettingsPage({ user }) {
               <div>
                 <p style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 }}>カード・請求書・サブスク管理</p>
                 <p style={{ fontSize: 12, color: C.textMid, lineHeight: 1.8 }}>
-                  Stripe の請求管理ページで、支払い方法の確認や請求履歴の参照ができます。
+                  初回課金後のカード情報は保持されます。以後のプラン変更はアプリ内で行い、解約時のみ Stripe へ移動します。
                 </p>
               </div>
-              <Btn
-                size="sm"
-                variant="ghost"
-                onClick={async () => {
-                  if (!user?.id || portalBusy) return;
-                  setPortalBusy(true);
-                  setPortalError("");
-                  try {
-                    const session = await createCustomerPortalSession(user.id);
-                    window.location.assign(session.url);
-                  } catch (error) {
-                    setPortalError(error instanceof Error ? error.message : "請求管理ページを開けませんでした。");
-                  } finally {
-                    setPortalBusy(false);
-                  }
-                }}
-                disabled={portalBusy || !billingCustomer?.stripeCustomerId}
-              >
-                {portalBusy ? "移動中..." : "請求管理を開く"}
-              </Btn>
             </div>
             <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
               <div style={{ border: `1px solid ${C.borderLight}`, padding: 16, background: C.bg }}>
@@ -9626,7 +9798,7 @@ function SettingsPage({ user }) {
               </div>
             </div>
             {portalError ? <p style={{ fontSize: 12, color: C.red, marginTop: 12 }}>{portalError}</p> : null}
-            {!billingCustomer?.stripeCustomerId ? (
+            {!portalReady ? (
               <p style={{ fontSize: 12, color: C.textMid, marginTop: 12, lineHeight: 1.8 }}>
                 最初の決済が完了すると Stripe Customer が作成され、ここから請求管理ページを開けます。
               </p>
@@ -9743,20 +9915,7 @@ function SettingsPage({ user }) {
             <Btn
               variant="ghost"
               size="sm"
-              onClick={async () => {
-                if (!user?.id || portalBusy || !billingCustomer?.stripeCustomerId) return;
-                setPortalBusy(true);
-                setPortalError("");
-                try {
-                  const session = await createCustomerPortalSession(user.id);
-                  window.location.assign(session.url);
-                } catch (error) {
-                  setPortalError(error instanceof Error ? error.message : "請求管理ページを開けませんでした。");
-                } finally {
-                  setPortalBusy(false);
-                }
-              }}
-              disabled={portalBusy || !billingCustomer?.stripeCustomerId}
+              onClick={() => setPage?.("pricing")}
             >
               プランを変更
             </Btn>
@@ -9764,7 +9923,27 @@ function SettingsPage({ user }) {
               variant="ghost"
               size="sm"
               onClick={async () => {
-                if (!user?.id || portalBusy || !billingCustomer?.stripeCustomerId) return;
+                if (!user?.id || portalBusy || !portalReady) return;
+                setPortalBusy(true);
+                setPortalError("");
+                try {
+                  const session = await createCustomerPortalSession(user.id);
+                  window.location.assign(session.url);
+                } catch (error) {
+                  setPortalError(error instanceof Error ? error.message : "カード情報変更ページを開けませんでした。");
+                } finally {
+                  setPortalBusy(false);
+                }
+              }}
+              disabled={portalBusy || !portalReady}
+            >
+              {portalBusy ? "移動中..." : "クレジットカード変更"}
+            </Btn>
+            <Btn
+              variant="ghost"
+              size="sm"
+              onClick={async () => {
+                if (!user?.id || portalBusy || !portalReady) return;
                 setPortalBusy(true);
                 setPortalError("");
                 try {
@@ -9776,15 +9955,51 @@ function SettingsPage({ user }) {
                   setPortalBusy(false);
                 }
               }}
-              disabled={portalBusy || !billingCustomer?.stripeCustomerId}
+              disabled={portalBusy || !portalReady}
             >
-              サブスクを管理
+              {portalBusy ? "移動中..." : "プランをキャンセル"}
             </Btn>
           </div>
         </div>
 
         <Btn variant="primary">変更を保存</Btn>
       </div>
+      <BillingConfirmModal
+        open={confirmTopupOpen}
+        title={currentOffer ? currentOffer.label : ""}
+        body="以前の決済に使ったカードで追加クレジットを購入します。カード番号の再入力は不要です。"
+        amountLabel={currentOffer ? formatYen(currentOffer.priceYen) : ""}
+        cardLabel={cardLabel}
+        note="決済が完了すると、すぐに 10 クレジットを加算します。"
+        confirmLabel="この内容で購入"
+        busy={topupBusy}
+        onCancel={() => {
+          if (!topupBusy) setConfirmTopupOpen(false);
+        }}
+        onConfirm={async () => {
+          if (!user?.id || !currentOffer || topupBusy) return;
+          setTopupBusy(true);
+          setTopupError("");
+          try {
+            const result = await createCheckoutSession({
+              userId: user.id,
+              mode: "payment",
+              packCode: currentOffer.id,
+            });
+            if (result?.user) {
+              onUserUpdate?.(result.user);
+            } else if (result?.url) {
+              window.location.assign(result.url);
+              return;
+            }
+            setConfirmTopupOpen(false);
+          } catch (error) {
+            setTopupError(error instanceof Error ? error.message : "決済ページの起動に失敗しました。");
+          } finally {
+            setTopupBusy(false);
+          }
+        }}
+      />
     </div>
   );
 }
@@ -10191,8 +10406,8 @@ export default function App() {
       />
     ),
     guide: <GuidePage isMobile={isMobile} setPage={setPage} />,
-    pricing: <PricingPage user={user} />,
-    settings: <SettingsPage user={user} />,
+    pricing: <PricingPage user={user} onUserUpdate={setUser} />,
+    settings: <SettingsPage user={user} setPage={setPage} onUserUpdate={setUser} />,
   };
 
   return (

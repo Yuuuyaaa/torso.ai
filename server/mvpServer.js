@@ -61,6 +61,7 @@ const STRIPE_PRICE_STARTER_TOPUP_10 = String(process.env.STRIPE_PRICE_STARTER_TO
 const STRIPE_PRICE_GROWTH_TOPUP_10 = String(process.env.STRIPE_PRICE_GROWTH_TOPUP_10 || "");
 const STRIPE_PRICE_BUSINESS_TOPUP_10 = String(process.env.STRIPE_PRICE_BUSINESS_TOPUP_10 || "");
 const STRIPE_PRICE_ENTERPRISE_TOPUP_10 = String(process.env.STRIPE_PRICE_ENTERPRISE_TOPUP_10 || "");
+const STRIPE_BILLING_PORTAL_CONFIGURATION_ID = String(process.env.STRIPE_BILLING_PORTAL_CONFIGURATION_ID || "");
 function normalizeTryonProModelName(value) {
   const v = String(value || "").trim().toLowerCase();
   if (!v) return "tryon-max";
@@ -258,6 +259,23 @@ async function stripeRequest(path, params) {
       "Content-Type": "application/x-www-form-urlencoded",
     },
     body: new URLSearchParams(params),
+  });
+  const text = await response.text();
+  const data = text ? JSON.parse(text) : null;
+  if (!response.ok) {
+    throw new Error(data?.error?.message || text || `Stripe error ${response.status}`);
+  }
+  return data;
+}
+
+async function stripeGetRequest(path, params = {}) {
+  requireStripeConfig();
+  const search = new URLSearchParams(params);
+  const suffix = search.toString() ? `?${search.toString()}` : "";
+  const response = await fetch(`https://api.stripe.com/v1${path}${suffix}`, {
+    headers: {
+      Authorization: `Bearer ${STRIPE_SECRET_KEY}`,
+    },
   });
   const text = await response.text();
   const data = text ? JSON.parse(text) : null;
@@ -794,11 +812,23 @@ function findSubscriptionOrderBySubscriptionId(subscriptionId) {
   return db.subscriptionOrders.find((row) => row.stripeSubscriptionId === subscriptionId) || null;
 }
 
+function findLatestSubscriptionOrderByUserId(userId) {
+  return db.subscriptionOrders
+    .filter((row) => row.userId === userId)
+    .sort((a, b) => +new Date(b.createdAt || 0) - +new Date(a.createdAt || 0))[0] || null;
+}
+
+function findLatestManagedSubscriptionOrderByUserId(userId) {
+  return db.subscriptionOrders
+    .filter((row) => row.userId === userId && String(row.stripeSubscriptionId || "").trim())
+    .sort((a, b) => +new Date(b.updatedAt || b.createdAt || 0) - +new Date(a.updatedAt || a.createdAt || 0))[0] || null;
+}
+
 function findBillingCustomerByUserId(userId) {
   return db.billingCustomers.find((row) => row.userId === userId) || null;
 }
 
-function upsertBillingCustomer({ userId, stripeCustomerId, billingEmail = "", payload = {} }) {
+function upsertBillingCustomer({ userId, stripeCustomerId, billingEmail = "", defaultPaymentMethodId = "", payload = {} }) {
   if (!userId || !stripeCustomerId) return null;
   const existing = db.billingCustomers.find((row) => row.userId === userId || row.stripeCustomerId === stripeCustomerId);
   if (existing) {
@@ -806,6 +836,7 @@ function upsertBillingCustomer({ userId, stripeCustomerId, billingEmail = "", pa
       userId,
       stripeCustomerId,
       billingEmail,
+      defaultPaymentMethodId: defaultPaymentMethodId || existing.defaultPaymentMethodId || "",
       payload,
       updatedAt: nowIso(),
     });
@@ -825,6 +856,45 @@ function upsertBillingCustomer({ userId, stripeCustomerId, billingEmail = "", pa
   db.billingCustomers.push(next);
   saveDb();
   return next;
+}
+
+async function getStripeCustomerBillingProfile(stripeCustomerId) {
+  if (!stripeCustomerId) return { defaultPaymentMethodId: "", billingEmail: "" };
+  const customer = await stripeGetRequest(`/customers/${encodeURIComponent(stripeCustomerId)}`);
+  const defaultPaymentMethodId = String(customer?.invoice_settings?.default_payment_method || "");
+  const billingEmail = String(customer?.email || "");
+  const methods = await stripeGetRequest("/payment_methods", {
+    customer: stripeCustomerId,
+    type: "card",
+    limit: "1",
+  });
+  const preferredMethod = methods?.data?.find?.((item) => String(item?.id || "") === defaultPaymentMethodId) || methods?.data?.[0] || null;
+  return {
+    defaultPaymentMethodId: String(preferredMethod?.id || defaultPaymentMethodId || ""),
+    billingEmail,
+    cardBrand: String(preferredMethod?.card?.brand || ""),
+    cardLast4: String(preferredMethod?.card?.last4 || ""),
+    cardExpMonth: preferredMethod?.card?.exp_month == null ? null : Number(preferredMethod.card.exp_month),
+    cardExpYear: preferredMethod?.card?.exp_year == null ? null : Number(preferredMethod.card.exp_year),
+  };
+}
+
+function resolveBillingCustomerForUser(userId) {
+  const directCustomer = findBillingCustomerByUserId(userId);
+  if (directCustomer?.stripeCustomerId) return directCustomer;
+
+  const latestSubscription = findLatestSubscriptionOrderByUserId(userId);
+  if (!latestSubscription?.stripeCustomerId) return null;
+
+  return upsertBillingCustomer({
+    userId,
+    stripeCustomerId: String(latestSubscription.stripeCustomerId),
+    billingEmail: latestSubscription.payload?.customer_email || "",
+    payload: {
+      source: "subscription_order_backfill",
+      subscriptionOrderId: latestSubscription.id,
+    },
+  });
 }
 
 function getWebhookEventLog(stripeEventId) {
@@ -926,7 +996,7 @@ function creditUserFromPack({ userId, packCode, orderId = "", stripePaymentInten
   saveDb();
 }
 
-function applySubscriptionInvoicePaid(invoice) {
+async function applySubscriptionInvoicePaid(invoice) {
   const line = Array.isArray(invoice?.lines?.data) ? invoice.lines.data[0] || null : null;
   const priceId = getInvoiceLinePriceId(line);
   const planId = getPlanIdBySubscriptionPrice(priceId);
@@ -947,13 +1017,19 @@ function applySubscriptionInvoicePaid(invoice) {
     });
   }
   if (invoice.customer) {
+    const billingProfile = await getStripeCustomerBillingProfile(String(invoice.customer));
     upsertBillingCustomer({
       userId,
       stripeCustomerId: String(invoice.customer),
-      billingEmail: String(invoice.customer_email || user.email || ""),
+      billingEmail: String(billingProfile.billingEmail || invoice.customer_email || user.email || ""),
+      defaultPaymentMethodId: billingProfile.defaultPaymentMethodId,
       payload: {
         source: "invoice.paid",
         stripeSubscriptionId: subscriptionId,
+        cardBrand: billingProfile.cardBrand || "",
+        cardLast4: billingProfile.cardLast4 || "",
+        cardExpMonth: billingProfile.cardExpMonth,
+        cardExpYear: billingProfile.cardExpYear,
       },
     });
   }
@@ -965,7 +1041,7 @@ function applySubscriptionInvoicePaid(invoice) {
   saveDb();
 }
 
-function handleStripeWebhookEvent(eventPayload) {
+async function handleStripeWebhookEvent(eventPayload) {
   const stripeEventId = String(eventPayload?.id || "");
   const type = String(eventPayload?.type || "");
   const object = eventPayload?.data?.object || {};
@@ -1001,13 +1077,19 @@ function handleStripeWebhookEvent(eventPayload) {
         stripeCheckoutSessionId: String(object.id || ""),
       });
       if (object.customer) {
+        const billingProfile = await getStripeCustomerBillingProfile(String(object.customer));
         upsertBillingCustomer({
           userId: String(metadata.user_id || object.client_reference_id || ""),
           stripeCustomerId: String(object.customer),
-          billingEmail: String(object.customer_details?.email || ""),
+          billingEmail: String(billingProfile.billingEmail || object.customer_details?.email || ""),
+          defaultPaymentMethodId: billingProfile.defaultPaymentMethodId,
           payload: {
             source: "checkout.session.completed",
             mode: "payment",
+            cardBrand: billingProfile.cardBrand || "",
+            cardLast4: billingProfile.cardLast4 || "",
+            cardExpMonth: billingProfile.cardExpMonth,
+            cardExpYear: billingProfile.cardExpYear,
           },
         });
       }
@@ -1041,14 +1123,20 @@ function handleStripeWebhookEvent(eventPayload) {
         }
       }
       if (object.customer) {
+        const billingProfile = await getStripeCustomerBillingProfile(String(object.customer));
         upsertBillingCustomer({
           userId: String(metadata.user_id || object.client_reference_id || ""),
           stripeCustomerId: String(object.customer),
-          billingEmail: String(object.customer_details?.email || ""),
+          billingEmail: String(billingProfile.billingEmail || object.customer_details?.email || ""),
+          defaultPaymentMethodId: billingProfile.defaultPaymentMethodId,
           payload: {
             source: "checkout.session.completed",
             mode: "subscription",
             stripeSubscriptionId: String(object.subscription || ""),
+            cardBrand: billingProfile.cardBrand || "",
+            cardLast4: billingProfile.cardLast4 || "",
+            cardExpMonth: billingProfile.cardExpMonth,
+            cardExpYear: billingProfile.cardExpYear,
           },
         });
       }
@@ -3481,7 +3569,7 @@ const server = createServer(async (req, res) => {
           .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
           .map(mapSubscriptionOrder),
         billingCustomer: (() => {
-          const customer = findBillingCustomerByUserId(userId);
+          const customer = resolveBillingCustomerForUser(userId);
           if (!customer) return null;
           return {
             userId: customer.userId,
@@ -3493,6 +3581,96 @@ const server = createServer(async (req, res) => {
             payload: customer.payload || {},
           };
         })(),
+      });
+      return;
+    }
+
+    if (req.method === "POST" && url.pathname === "/api/billing/change-plan") {
+      const body = await parseBody(req);
+      const userId = String(body.userId || "").trim();
+      const targetPlanId = String(body.targetPlanId || "").trim().toLowerCase();
+      if (!userId) {
+        json(res, 400, { error: "userId is required" });
+        return;
+      }
+      if (!SUBSCRIPTION_PRICE_BY_PLAN[targetPlanId]) {
+        json(res, 400, { error: "unsupported target plan" });
+        return;
+      }
+      const user = findUser(userId);
+      if (!user) {
+        json(res, 404, { error: "user not found" });
+        return;
+      }
+      if (String(user.plan || "free").toLowerCase() === targetPlanId) {
+        json(res, 400, { error: "already on target plan" });
+        return;
+      }
+      const order = findLatestManagedSubscriptionOrderByUserId(userId);
+      if (!order?.stripeSubscriptionId) {
+        json(res, 400, { error: "active subscription not found" });
+        return;
+      }
+      const subscription = await stripeGetRequest(`/subscriptions/${encodeURIComponent(order.stripeSubscriptionId)}`, {
+        "expand[]": "items.data.price",
+      });
+      const item = Array.isArray(subscription?.items?.data) ? subscription.items.data[0] || null : null;
+      if (!item?.id) {
+        json(res, 400, { error: "subscription item not found" });
+        return;
+      }
+      const updatedSubscription = await stripeRequest(`/subscriptions/${encodeURIComponent(order.stripeSubscriptionId)}`, {
+        "items[0][id]": String(item.id),
+        "items[0][price]": String(SUBSCRIPTION_PRICE_BY_PLAN[targetPlanId]),
+        proration_behavior: "always_invoice",
+        payment_behavior: "error_if_incomplete",
+        "metadata[user_id]": userId,
+        "metadata[target_plan_id]": targetPlanId,
+      });
+
+      const previousPlanId = user.plan || "free";
+      const previousCredits = Number(user.credits || 0);
+      const nextCredits = Number(PLAN_MONTHLY_CREDITS[targetPlanId] || 0);
+      user.plan = targetPlanId;
+      user.credits = nextCredits;
+      updateSubscriptionOrder(order.id, {
+        planId: targetPlanId,
+        status: "active",
+        stripeCustomerId: updatedSubscription.customer || order.stripeCustomerId || "",
+        payload: {
+          ...(order.payload || {}),
+          lastPlanChangeAt: nowIso(),
+          previousPlanId,
+          targetPlanId,
+          source: "app.plan_change",
+        },
+      });
+      if (updatedSubscription.customer) {
+        upsertBillingCustomer({
+          userId,
+          stripeCustomerId: String(updatedSubscription.customer),
+          billingEmail: String(user.email || ""),
+          payload: {
+            source: "billing.change-plan",
+            stripeSubscriptionId: String(updatedSubscription.id || order.stripeSubscriptionId),
+          },
+        });
+      }
+      appendCreditEvent(userId, "subscription_plan_changed", nextCredits - previousCredits, {
+        previousPlanId,
+        targetPlanId,
+        stripeSubscriptionId: String(updatedSubscription.id || order.stripeSubscriptionId),
+      });
+      saveDb();
+      json(res, 200, {
+        ok: true,
+        user: mapUser(user),
+        subscriptionOrder: mapSubscriptionOrder({
+          ...order,
+          planId: targetPlanId,
+          status: "active",
+          stripeCustomerId: updatedSubscription.customer || order.stripeCustomerId || "",
+        }),
       });
       return;
     }
@@ -3509,7 +3687,7 @@ const server = createServer(async (req, res) => {
         json(res, 400, { error: "returnUrl is required" });
         return;
       }
-      const billingCustomer = findBillingCustomerByUserId(userId);
+      const billingCustomer = resolveBillingCustomerForUser(userId);
       if (!billingCustomer?.stripeCustomerId) {
         json(res, 400, { error: "Stripe customer not found for this account" });
         return;
@@ -3517,6 +3695,9 @@ const server = createServer(async (req, res) => {
       const session = await stripeRequest("/billing_portal/sessions", {
         customer: billingCustomer.stripeCustomerId,
         return_url: returnUrl,
+        ...(STRIPE_BILLING_PORTAL_CONFIGURATION_ID
+          ? { configuration: STRIPE_BILLING_PORTAL_CONFIGURATION_ID }
+          : {}),
       });
       json(res, 200, { url: session.url || "", id: session.id || "" });
       return;
@@ -3558,6 +3739,67 @@ const server = createServer(async (req, res) => {
           planId === "enterprise" ? 198000 :
           null;
         const order = createSubscriptionOrder({ userId, planId, interval: "month", amountYen });
+        if (billingCustomer?.stripeCustomerId) {
+          const billingProfile = await getStripeCustomerBillingProfile(billingCustomer.stripeCustomerId);
+          if (billingProfile.defaultPaymentMethodId) {
+            const subscription = await stripeRequest("/subscriptions", {
+              customer: billingCustomer.stripeCustomerId,
+              "items[0][price]": priceId,
+              default_payment_method: billingProfile.defaultPaymentMethodId,
+              payment_behavior: "error_if_incomplete",
+              collection_method: "charge_automatically",
+              "metadata[user_id]": userId,
+              "metadata[purchase_kind]": "subscription",
+              "metadata[plan_id]": planId,
+              "metadata[order_id]": order.id,
+            });
+            user.plan = planId;
+            user.credits = Number(PLAN_MONTHLY_CREDITS[planId] || 0);
+            updateSubscriptionOrder(order.id, {
+              status: "active",
+              stripeSubscriptionId: subscription.id || "",
+              stripeCustomerId: subscription.customer || billingCustomer.stripeCustomerId,
+              stripeLatestInvoiceId: subscription.latest_invoice || "",
+              payload: {
+                directSubscriptionCreatedAt: nowIso(),
+                source: "app.direct_subscription_create",
+              },
+            });
+            upsertBillingCustomer({
+              userId,
+              stripeCustomerId: String(subscription.customer || billingCustomer.stripeCustomerId),
+              billingEmail: billingProfile.billingEmail || String(user.email || ""),
+              defaultPaymentMethodId: billingProfile.defaultPaymentMethodId,
+              payload: {
+                source: "direct_subscription_create",
+                stripeSubscriptionId: String(subscription.id || ""),
+                cardBrand: billingProfile.cardBrand || "",
+                cardLast4: billingProfile.cardLast4 || "",
+                cardExpMonth: billingProfile.cardExpMonth,
+                cardExpYear: billingProfile.cardExpYear,
+              },
+            });
+            appendCreditEvent(userId, "subscription_cycle_reset", Number(PLAN_MONTHLY_CREDITS[planId] || 0), {
+              planId,
+              stripeSubscriptionId: String(subscription.id || ""),
+              source: "direct_subscription_create",
+            });
+            saveDb();
+            json(res, 200, {
+              ok: true,
+              user: mapUser(user),
+              subscriptionOrder: mapSubscriptionOrder({
+                ...order,
+                planId,
+                status: "active",
+                stripeSubscriptionId: subscription.id || "",
+                stripeCustomerId: subscription.customer || billingCustomer.stripeCustomerId,
+                stripeLatestInvoiceId: subscription.latest_invoice || "",
+              }),
+            });
+            return;
+          }
+        }
         const session = await stripeRequest("/checkout/sessions", {
           mode: "subscription",
           success_url: successUrl,
@@ -3607,13 +3849,60 @@ const server = createServer(async (req, res) => {
           amountYen: pack.amountYen,
           introPackEligible: Boolean(user.introPackEligible),
         });
+        if (billingCustomer?.stripeCustomerId) {
+          const billingProfile = await getStripeCustomerBillingProfile(billingCustomer.stripeCustomerId);
+          if (billingProfile.defaultPaymentMethodId) {
+            const paymentIntent = await stripeRequest("/payment_intents", {
+              amount: String(pack.amountYen),
+              currency: "jpy",
+              customer: billingCustomer.stripeCustomerId,
+              payment_method: billingProfile.defaultPaymentMethodId,
+              confirm: "true",
+              off_session: "true",
+              "metadata[user_id]": userId,
+              "metadata[purchase_kind]": "credit_pack",
+              "metadata[pack_code]": packCode,
+              "metadata[order_id]": order.id,
+            });
+            creditUserFromPack({
+              userId,
+              packCode,
+              orderId: order.id,
+              stripePaymentIntentId: String(paymentIntent.id || ""),
+              stripeCheckoutSessionId: "",
+            });
+            upsertBillingCustomer({
+              userId,
+              stripeCustomerId: String(paymentIntent.customer || billingCustomer.stripeCustomerId),
+              billingEmail: billingProfile.billingEmail || String(user.email || ""),
+              defaultPaymentMethodId: billingProfile.defaultPaymentMethodId,
+              payload: {
+                source: "direct_credit_pack_payment",
+                cardBrand: billingProfile.cardBrand || "",
+                cardLast4: billingProfile.cardLast4 || "",
+                cardExpMonth: billingProfile.cardExpMonth,
+                cardExpYear: billingProfile.cardExpYear,
+              },
+            });
+            json(res, 200, {
+              ok: true,
+              user: mapUser(findUser(userId)),
+              creditPackOrder: mapCreditPackOrder({
+                ...order,
+                status: "paid",
+                stripePaymentIntentId: paymentIntent.id || "",
+              }),
+            });
+            return;
+          }
+        }
         const session = await stripeRequest("/checkout/sessions", {
           mode: "payment",
           success_url: successUrl,
           cancel_url: cancelUrl,
           ...(billingCustomer?.stripeCustomerId
             ? { customer: billingCustomer.stripeCustomerId }
-            : { customer_email: String(user.email || "") }),
+            : { customer_email: String(user.email || ""), customer_creation: "always" }),
           client_reference_id: userId,
           "line_items[0][price]": pack.priceId,
           "line_items[0][quantity]": "1",
@@ -3625,6 +3914,7 @@ const server = createServer(async (req, res) => {
           "payment_intent_data[metadata][purchase_kind]": "credit_pack",
           "payment_intent_data[metadata][pack_code]": packCode,
           "payment_intent_data[metadata][order_id]": order.id,
+          "payment_intent_data[setup_future_usage]": "off_session",
         });
         updateCreditPackOrder(order.id, { stripeCheckoutSessionId: session.id });
         json(res, 200, { url: session.url, id: session.id, orderId: order.id });
