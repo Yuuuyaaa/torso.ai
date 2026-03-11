@@ -608,31 +608,56 @@ async function readAssetLibrary(userId) {
   if (!userId) return { studio: [], models: [], products: [] };
   if (hasSupabaseConfig()) {
     const rows = await supabaseRequest(
-      `/app_asset_libraries?user_id=eq.${encodeURIComponent(userId)}&select=studio_assets,model_assets,product_assets&limit=1`,
+      `/app_asset_libraries?user_id=eq.${encodeURIComponent(userId)}&select=studio_assets,model_assets,product_assets,studio_count,model_count,product_count&limit=1`,
       { method: "GET" },
     );
     const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
     if (!row) return { studio: [], models: [], products: [] };
-    return normalizeAssetLibraryPayload({
+    const normalized = normalizeAssetLibraryPayload({
       studio: row.studio_assets,
       models: row.model_assets,
       products: row.product_assets,
     });
+    return {
+      ...normalized,
+      stats: {
+        studioCount: Number(row.studio_count ?? normalized.studio.length ?? 0),
+        modelCount: Number(row.model_count ?? normalized.models.length ?? 0),
+        productCount: Number(row.product_count ?? normalized.products.length ?? 0),
+      },
+    };
   }
   const row = (db.assetLibraries || []).find((item) => item.userId === userId);
-  return normalizeAssetLibraryPayload(row || {});
+  const normalized = normalizeAssetLibraryPayload(row || {});
+  return {
+    ...normalized,
+    stats: {
+      studioCount: normalized.studio.length,
+      modelCount: normalized.models.length,
+      productCount: normalized.products.length,
+    },
+  };
 }
 
 async function writeAssetLibrary(userId, payload) {
+  const previousLibrary = await readAssetLibrary(userId);
   const normalized = normalizeAssetLibraryPayload(payload);
   if (!userId) return normalized;
   const compacted = await compactAssetLibraryForSupabase(userId, normalized);
+  const counts = {
+    studioCount: compacted.studio.length,
+    modelCount: compacted.models.length,
+    productCount: compacted.products.length,
+  };
   if (hasSupabaseConfig()) {
     const body = [{
       user_id: userId,
       studio_assets: compacted.studio,
       model_assets: compacted.models,
       product_assets: compacted.products,
+      studio_count: counts.studioCount,
+      model_count: counts.modelCount,
+      product_count: counts.productCount,
     }];
     const rows = await supabaseRequest("/app_asset_libraries?on_conflict=user_id", {
       method: "POST",
@@ -643,11 +668,19 @@ async function writeAssetLibrary(userId, payload) {
     });
     const row = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
     if (!row) return compacted;
-    return normalizeAssetLibraryPayload({
+    const normalizedRow = normalizeAssetLibraryPayload({
       studio: row.studio_assets,
       models: row.model_assets,
       products: row.product_assets,
     });
+    return {
+      ...normalizedRow,
+      stats: {
+        studioCount: Number(row.studio_count ?? counts.studioCount),
+        modelCount: Number(row.model_count ?? counts.modelCount),
+        productCount: Number(row.product_count ?? counts.productCount),
+      },
+    };
   }
   const now = nowIso();
   const libs = Array.isArray(db.assetLibraries) ? db.assetLibraries : [];
@@ -656,19 +689,26 @@ async function writeAssetLibrary(userId, payload) {
     libs[idx] = {
       ...libs[idx],
       ...compacted,
+      studioCount: counts.studioCount,
+      modelCount: counts.modelCount,
+      productCount: counts.productCount,
       updatedAt: now,
     };
   } else {
     libs.push({
       userId,
       ...compacted,
+      studioCount: counts.studioCount,
+      modelCount: counts.modelCount,
+      productCount: counts.productCount,
       createdAt: now,
       updatedAt: now,
     });
   }
   db.assetLibraries = libs;
+  appendAssetLibraryEvents(userId, previousLibrary, compacted);
   saveDb();
-  return compacted;
+  return { ...compacted, stats: counts };
 }
 
 function nowIso() {
@@ -740,6 +780,66 @@ function appendJobEvent(jobId, type, payload = {}) {
     payload,
     createdAt: nowIso(),
   });
+}
+
+function appendAssetEvent(userId, assetType, assetId, eventType, payload = {}) {
+  if (!Array.isArray(db.assetEvents)) db.assetEvents = [];
+  db.assetEvents.push({
+    id: id("ase"),
+    userId,
+    assetType,
+    assetId,
+    eventType,
+    payload,
+    createdAt: nowIso(),
+  });
+}
+
+function appendAssetLibraryEvents(userId, previousLibrary = {}, nextLibrary = {}) {
+  const assetTypes = [
+    ["studio", "studio"],
+    ["models", "model"],
+    ["products", "product"],
+  ];
+  for (const [key, assetType] of assetTypes) {
+    const previousItems = Array.isArray(previousLibrary?.[key]) ? previousLibrary[key] : [];
+    const nextItems = Array.isArray(nextLibrary?.[key]) ? nextLibrary[key] : [];
+    const previousMap = new Map(previousItems.map((asset) => [String(asset?.id || ""), asset]).filter(([id]) => id));
+    const nextMap = new Map(nextItems.map((asset) => [String(asset?.id || ""), asset]).filter(([id]) => id));
+
+    for (const [assetId, asset] of nextMap.entries()) {
+      const before = previousMap.get(assetId);
+      if (!before) {
+        appendAssetEvent(userId, assetType, assetId, "uploaded", {
+          name: String(asset?.name || ""),
+          category: String(asset?.category || ""),
+          outputUrl: String(asset?.outputUrl || ""),
+          sourceUrl: String(asset?.sourceUrl || ""),
+        });
+        continue;
+      }
+      const categoryChanged = String(before?.category || "") !== String(asset?.category || "");
+      const outputChanged = String(before?.outputUrl || "") !== String(asset?.outputUrl || "");
+      if (categoryChanged || outputChanged) {
+        appendAssetEvent(userId, assetType, assetId, "updated", {
+          previousCategory: String(before?.category || ""),
+          nextCategory: String(asset?.category || ""),
+          outputUrl: String(asset?.outputUrl || ""),
+          sourceUrl: String(asset?.sourceUrl || ""),
+        });
+      }
+    }
+
+    for (const [assetId, asset] of previousMap.entries()) {
+      if (nextMap.has(assetId)) continue;
+      appendAssetEvent(userId, assetType, assetId, "deleted", {
+        name: String(asset?.name || ""),
+        category: String(asset?.category || ""),
+        outputUrl: String(asset?.outputUrl || ""),
+        sourceUrl: String(asset?.sourceUrl || ""),
+      });
+    }
+  }
 }
 
 function appendCreditEvent(userId, type, delta, payload = {}) {
@@ -4302,7 +4402,21 @@ const server = createServer(async (req, res) => {
         style,
         provider: "fashn",
         outputPreset,
-        styleConfig: normalizedStyleConfig,
+        styleConfig: {
+          ...normalizedStyleConfig,
+          requestSnapshot: {
+            outputPreset,
+            backgroundMode,
+            backgroundColor,
+            modelReference,
+            faceReference,
+            backgroundReference,
+            customPrompt,
+            randomModelPrompt,
+            inputCount: items.length,
+            effectiveModelRunStrategy,
+          },
+        },
         backgroundAssetId,
         backgroundMode,
         backgroundColor,

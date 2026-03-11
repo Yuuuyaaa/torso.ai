@@ -75,6 +75,36 @@ function nowIso() {
   return new Date().toISOString();
 }
 
+function normalizeAssetLibraryPayload(raw = {}) {
+  const payload = typeof raw === "object" && raw ? raw : {};
+  const normalizeAsset = (asset = {}) => ({ ...(asset || {}) });
+  const normalizeList = (list) => (Array.isArray(list) ? list.map((asset) => normalizeAsset(asset)) : []);
+  return {
+    studio: normalizeList(payload.studio),
+    models: normalizeList(payload.models),
+    products: normalizeList(payload.products),
+  };
+}
+
+function isDataUrl(value) {
+  return typeof value === "string" && value.startsWith("data:");
+}
+
+function hasAnyAssetItems(lib = {}) {
+  return (Array.isArray(lib.studio) && lib.studio.length > 0)
+    || (Array.isArray(lib.models) && lib.models.length > 0)
+    || (Array.isArray(lib.products) && lib.products.length > 0);
+}
+
+function buildAssetLibraryCounts(library = {}) {
+  const normalized = normalizeAssetLibraryPayload(library);
+  return {
+    studioCount: normalized.studio.length,
+    modelCount: normalized.models.length,
+    productCount: normalized.products.length,
+  };
+}
+
 const CREDIT_PACK_CONFIG = {
   "free-intro-10": { planId: "free", credits: 10, amountYen: 500, priceId: STRIPE_PRICE_FREE_INTRO_10, introOnly: true },
   "free-topup-10": { planId: "free", credits: 10, amountYen: 1800, priceId: STRIPE_PRICE_FREE_TOPUP_10, introOnly: false },
@@ -784,13 +814,23 @@ async function findOrCreateGoogleUser(authUser) {
 }
 
 async function ensureAssetLibrary(userId) {
-  const rows = await supabaseRequest(`/app_asset_libraries?user_id=eq.${encodeURIComponent(userId)}&select=user_id,studio_assets,model_assets,product_assets&limit=1`);
+  const rows = await supabaseRequest(`/app_asset_libraries?user_id=eq.${encodeURIComponent(userId)}&select=user_id,studio_assets,model_assets,product_assets,studio_count,model_count,product_count&limit=1`);
   const row = Array.isArray(rows) ? rows[0] || null : null;
   if (row) {
+    const counts = buildAssetLibraryCounts({
+      studio: Array.isArray(row.studio_assets) ? row.studio_assets : [],
+      models: Array.isArray(row.model_assets) ? row.model_assets : [],
+      products: Array.isArray(row.product_assets) ? row.product_assets : [],
+    });
     return {
       studio: Array.isArray(row.studio_assets) ? row.studio_assets : [],
       models: Array.isArray(row.model_assets) ? row.model_assets : [],
       products: Array.isArray(row.product_assets) ? row.product_assets : [],
+      stats: {
+        studioCount: Number(row.studio_count ?? counts.studioCount ?? 0),
+        modelCount: Number(row.model_count ?? counts.modelCount ?? 0),
+        productCount: Number(row.product_count ?? counts.productCount ?? 0),
+      },
     };
   }
   const created = await supabaseRequest("/app_asset_libraries", {
@@ -800,6 +840,9 @@ async function ensureAssetLibrary(userId) {
       studio_assets: [],
       model_assets: [],
       product_assets: [],
+      studio_count: 0,
+      model_count: 0,
+      product_count: 0,
     },
   });
   const next = Array.isArray(created) ? created[0] || null : null;
@@ -807,7 +850,50 @@ async function ensureAssetLibrary(userId) {
     studio: Array.isArray(next?.studio_assets) ? next.studio_assets : [],
     models: Array.isArray(next?.model_assets) ? next.model_assets : [],
     products: Array.isArray(next?.product_assets) ? next.product_assets : [],
+    stats: {
+      studioCount: Number(next?.studio_count || 0),
+      modelCount: Number(next?.model_count || 0),
+      productCount: Number(next?.product_count || 0),
+    },
   };
+}
+
+async function compactSingleAssetForSupabase(userId, assetType, asset) {
+  const next = { ...(asset || {}) };
+  const candidates = [
+    { field: "dataUrl", purpose: "output" },
+    { field: "outputUrl", purpose: "output" },
+    { field: "faceReferenceDataUrl", purpose: "face" },
+  ];
+  for (const candidate of candidates) {
+    const value = String(next[candidate.field] || "");
+    if (!value || !isDataUrl(value)) continue;
+    const { mime, buffer } = parseDataUrl(value);
+    const ext = extFromMime(mime || "image/jpeg");
+    const pathValue = `${userId}/${assetType}/${candidate.purpose}/${Date.now()}-${randomUUID()}${ext}`;
+    const publicUrl = await storageUpload(pathValue, buffer, mime || "image/jpeg");
+    if (candidate.purpose === "face") {
+      next.faceReferenceUrl = publicUrl;
+      next.faceReferenceDataUrl = "";
+    } else {
+      next.outputUrl = publicUrl;
+      if (!next.sourceUrl) next.sourceUrl = publicUrl;
+      if (candidate.field === "dataUrl") next.dataUrl = "";
+    }
+  }
+  return next;
+}
+
+async function compactAssetLibraryForSupabase(userId, payload) {
+  const normalized = normalizeAssetLibraryPayload(payload);
+  if (!hasAnyAssetItems(normalized)) return normalized;
+  const studio = [];
+  const models = [];
+  const products = [];
+  for (const asset of normalized.studio) studio.push(await compactSingleAssetForSupabase(userId, "studio", asset));
+  for (const asset of normalized.models) models.push(await compactSingleAssetForSupabase(userId, "models", asset));
+  for (const asset of normalized.products) products.push(await compactSingleAssetForSupabase(userId, "products", asset));
+  return { studio, models, products };
 }
 
 async function listJobsForUser(userId) {
@@ -1232,6 +1318,66 @@ async function appendJobEvent(userId, jobId, eventType, payload = {}) {
       payload,
     },
   });
+}
+
+async function appendAssetEvent(userId, assetType, assetId, eventType, payload = {}) {
+  await supabaseRequest("/app_asset_events", {
+    method: "POST",
+    body: {
+      user_id: userId,
+      asset_type: assetType,
+      asset_id: assetId,
+      event_type: eventType,
+      payload,
+    },
+  });
+}
+
+async function appendAssetLibraryEvents(userId, previousLibrary = {}, nextLibrary = {}) {
+  const assetTypes = [
+    ["studio", "studio"],
+    ["models", "model"],
+    ["products", "product"],
+  ];
+  for (const [key, assetType] of assetTypes) {
+    const previousItems = Array.isArray(previousLibrary?.[key]) ? previousLibrary[key] : [];
+    const nextItems = Array.isArray(nextLibrary?.[key]) ? nextLibrary[key] : [];
+    const previousMap = new Map(previousItems.map((asset) => [String(asset?.id || ""), asset]).filter(([id]) => id));
+    const nextMap = new Map(nextItems.map((asset) => [String(asset?.id || ""), asset]).filter(([id]) => id));
+
+    for (const [assetId, asset] of nextMap.entries()) {
+      const before = previousMap.get(assetId);
+      if (!before) {
+        await appendAssetEvent(userId, assetType, assetId, "uploaded", {
+          name: String(asset?.name || ""),
+          category: String(asset?.category || ""),
+          outputUrl: String(asset?.outputUrl || ""),
+          sourceUrl: String(asset?.sourceUrl || ""),
+        });
+        continue;
+      }
+      const categoryChanged = String(before?.category || "") !== String(asset?.category || "");
+      const outputChanged = String(before?.outputUrl || "") !== String(asset?.outputUrl || "");
+      if (categoryChanged || outputChanged) {
+        await appendAssetEvent(userId, assetType, assetId, "updated", {
+          previousCategory: String(before?.category || ""),
+          nextCategory: String(asset?.category || ""),
+          outputUrl: String(asset?.outputUrl || ""),
+          sourceUrl: String(asset?.sourceUrl || ""),
+        });
+      }
+    }
+
+    for (const [assetId, asset] of previousMap.entries()) {
+      if (nextMap.has(assetId)) continue;
+      await appendAssetEvent(userId, assetType, assetId, "deleted", {
+        name: String(asset?.name || ""),
+        category: String(asset?.category || ""),
+        outputUrl: String(asset?.outputUrl || ""),
+        sourceUrl: String(asset?.sourceUrl || ""),
+      });
+    }
+  }
 }
 
 function getSubscriptionCreditBalance(user) {
@@ -2009,11 +2155,21 @@ export async function handler(event) {
       const body = parseBody(event);
       const userId = String(body.userId || "").trim();
       if (!userId) return json(400, { error: "userId is required" });
+      const previousLibrary = await ensureAssetLibrary(userId);
+      const compacted = await compactAssetLibraryForSupabase(userId, {
+        studio: Array.isArray(body.studio) ? body.studio : [],
+        models: Array.isArray(body.models) ? body.models : [],
+        products: Array.isArray(body.products) ? body.products : [],
+      });
+      const counts = buildAssetLibraryCounts(compacted);
       const next = {
         user_id: userId,
-        studio_assets: Array.isArray(body.studio) ? body.studio : [],
-        model_assets: Array.isArray(body.models) ? body.models : [],
-        product_assets: Array.isArray(body.products) ? body.products : [],
+        studio_assets: compacted.studio,
+        model_assets: compacted.models,
+        product_assets: compacted.products,
+        studio_count: counts.studioCount,
+        model_count: counts.modelCount,
+        product_count: counts.productCount,
       };
       const rows = await supabaseRequest("/app_asset_libraries?on_conflict=user_id", {
         method: "POST",
@@ -2021,11 +2177,17 @@ export async function handler(event) {
         body: next,
       });
       const row = Array.isArray(rows) ? rows[0] || null : null;
+      await appendAssetLibraryEvents(userId, previousLibrary, compacted);
       return json(200, {
         library: {
           studio: Array.isArray(row?.studio_assets) ? row.studio_assets : [],
           models: Array.isArray(row?.model_assets) ? row.model_assets : [],
           products: Array.isArray(row?.product_assets) ? row.product_assets : [],
+          stats: {
+            studioCount: Number(row?.studio_count || counts.studioCount),
+            modelCount: Number(row?.model_count || counts.modelCount),
+            productCount: Number(row?.product_count || counts.productCount),
+          },
         },
       });
     }
@@ -2142,6 +2304,18 @@ export async function handler(event) {
           output_preset: outputPreset,
           style_config: {
             ...normalizedStyleConfig,
+            requestSnapshot: {
+              outputPreset,
+              backgroundMode,
+              backgroundColor,
+              modelReference,
+              faceReference,
+              backgroundReference,
+              customPrompt,
+              randomModelPrompt,
+              inputCount: normalizedFiles.length,
+              effectiveModelRunStrategy,
+            },
             creditBuckets: {
               subscription: reservation.subscriptionUsed,
               purchased: reservation.purchasedUsed,

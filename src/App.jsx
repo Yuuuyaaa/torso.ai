@@ -10407,13 +10407,39 @@ export default function App() {
     });
   };
 
+  const persistProductAssetsSnapshot = useCallback(async (nextAssets) => {
+    if (!user?.id || user?.isDemo) return;
+    const mergedProducts = mergeProductAssets(Array.isArray(nextAssets) ? nextAssets : []);
+    writeAssetLibrary(user.id, {
+      studio: studioAssets,
+      models: modelAssets,
+      products: stripProductAssetsForMeta(mergedProducts),
+    });
+    writeDashboardCache(user.id, {
+      jobs,
+      creditHistory,
+      studioAssets,
+      modelAssets,
+      productAssets: mergedProducts,
+    });
+    await persistProductAssetsToDb(user.id, mergedProducts);
+  }, [creditHistory, jobs, modelAssets, studioAssets, user?.id, user?.isDemo]);
+
+  const updateProductAssets = useCallback((updater) => {
+    setProductAssets((prev) => {
+      const nextAssets = mergeProductAssets(typeof updater === "function" ? updater(prev) : updater);
+      void persistProductAssetsSnapshot(nextAssets);
+      return nextAssets;
+    });
+  }, [persistProductAssetsSnapshot]);
+
   const pages = {
     history: <HistoryPage user={user} jobs={jobs} onRefresh={refreshData} isMobile={isMobile} />,
     products: (
       <ProductsLibraryPage
         user={user}
         assets={productAssets}
-        setAssets={setProductAssets}
+        setAssets={updateProductAssets}
       />
     ),
     edit: <EditPage jobs={jobs} user={user} onDataRefresh={refreshData} onJobCreated={handleJobCreated} studioAssets={studioAssets} modelAssets={modelAssets} isMobile={isMobile} />,
