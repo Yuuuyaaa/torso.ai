@@ -2402,6 +2402,14 @@ function buildTryonOrientationDirective(styleConfig) {
   return "";
 }
 
+function createSolidBackgroundDataUrl(hex = "#FFFFFF") {
+  const normalized = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(String(hex || "").trim())
+    ? String(hex || "").trim()
+    : "#FFFFFF";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="1536" viewBox="0 0 1536 1536"><rect width="1536" height="1536" fill="${normalized}"/></svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
+}
+
 async function runPayload(style, imageRef, outputPreset, options = {}) {
   const {
     modelImageRef = "",
@@ -2869,6 +2877,10 @@ async function processItem(jobId, itemId) {
       preserveGarment: true,
     };
     const hasBackgroundReference = String(job.backgroundReference || "").trim().length > 0;
+    const solidBackgroundReference = (String(job.backgroundMode || "solid") === "solid"
+      && (job.style === "hanger" || job.style === "ghost"))
+      ? createSolidBackgroundDataUrl(originalStyleConfig?.background?.color || "#FFFFFF")
+      : "";
     const useDirectBackgroundReference = job.style === "model"
       && requestedModelRunStrategy === "product-to-model"
       && String(job.backgroundMode || "solid") === "image"
@@ -2953,13 +2965,14 @@ async function processItem(jobId, itemId) {
       || predictionStatus === "succeeded"
       || predictionStatus === "success";
     if (isCompletedLike || hasOutput) {
-      const shouldRunBackgroundEdit = String(job.backgroundMode || "solid") === "image"
-        && String(job.backgroundReference || "").trim().length > 0
-        && !useDirectBackgroundReference;
+      const editBackgroundReference = String(job.backgroundMode || "solid") === "image"
+        ? (String(job.backgroundReference || "").trim() && !useDirectBackgroundReference ? job.backgroundReference : "")
+        : solidBackgroundReference;
+      const shouldRunBackgroundEdit = Boolean(editBackgroundReference);
       if (outputUrl && shouldRunBackgroundEdit) {
         const editRunRes = await fashnRequest("/run", {
           method: "POST",
-          body: JSON.stringify(buildBackgroundEditPayload(outputUrl, job.backgroundReference, originalStyleConfig)),
+          body: JSON.stringify(buildBackgroundEditPayload(outputUrl, editBackgroundReference, originalStyleConfig)),
         });
         const editPredictionId = editRunRes.id;
         appendJobEvent(job.id, "fashn_edit_started", {

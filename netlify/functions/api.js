@@ -1200,6 +1200,14 @@ function toAbsoluteUrl(event, value) {
   return origin ? `${origin}${raw}` : raw;
 }
 
+function createSolidBackgroundDataUrl(hex = "#FFFFFF") {
+  const normalized = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.test(String(hex || "").trim())
+    ? String(hex || "").trim()
+    : "#FFFFFF";
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1536" height="1536" viewBox="0 0 1536 1536"><rect width="1536" height="1536" fill="${normalized}"/></svg>`;
+  return `data:image/svg+xml;base64,${Buffer.from(svg).toString("base64")}`;
+}
+
 function getPromptReferenceUrl(event, styleMode) {
   const origin = getRequestOrigin(event);
   if (!origin) return "";
@@ -1671,6 +1679,10 @@ async function processJobItem(event, job, item, requestOptions) {
   await appendJobEvent(job.userId, job.id, "item_processing", { itemId: item.id });
 
   try {
+    const solidBackgroundReference = (String(requestOptions.backgroundMode || "solid") === "solid"
+      && (job.style === "hanger" || job.style === "ghost"))
+      ? createSolidBackgroundDataUrl(originalStyleConfig?.background?.color || "#FFFFFF")
+      : "";
     const useDirectBackgroundReference = job.style === "model"
       && requestOptions.effectiveModelRunStrategy === "product-to-model"
       && String(requestOptions.backgroundMode || "solid") === "image"
@@ -1707,13 +1719,14 @@ async function processJobItem(event, job, item, requestOptions) {
     if (!isCompletedLike && !outputUrl) {
       throw new Error(statusRes?.error || "FASHN timeout");
     }
-    const shouldRunBackgroundEdit = String(requestOptions.backgroundMode || "solid") === "image"
-      && String(requestOptions.backgroundReference || "").trim()
-      && !useDirectBackgroundReference;
+    const editBackgroundReference = String(requestOptions.backgroundMode || "solid") === "image"
+      ? (String(requestOptions.backgroundReference || "").trim() && !useDirectBackgroundReference ? requestOptions.backgroundReference : "")
+      : solidBackgroundReference;
+    const shouldRunBackgroundEdit = Boolean(editBackgroundReference);
     if (outputUrl && shouldRunBackgroundEdit) {
       const editRunRes = await fashnRequest("/run", {
         method: "POST",
-        body: JSON.stringify(buildBackgroundEditPayload(event, outputUrl, requestOptions.backgroundReference, originalStyleConfig)),
+        body: JSON.stringify(buildBackgroundEditPayload(event, outputUrl, editBackgroundReference, originalStyleConfig)),
         timeoutMs: 45000,
       });
       const editStatusRes = await waitForPrediction(editRunRes.id, 120, 2000);
