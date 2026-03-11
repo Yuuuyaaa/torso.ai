@@ -1214,8 +1214,8 @@ function buildPromptFromConfig(styleConfig) {
   const baseByMode = {
     torso: "Place the garment on the provided torso mannequin. No head. No arms. Keep the garment fully faithful to the source image.",
     mannequin: "Place the garment on the provided full-body mannequin. Do not add extra clothing or accessories. Keep the garment fully faithful to the source image.",
-    hanger: "Present the garment on a hanger centered on a clean studio background. Keep the garment fully faithful to the source image.",
-    ghost: "Create a high-end ghost mannequin style e-commerce image. Keep the garment fully faithful to the source image.",
+    hanger: "Present the garment on a hanger. Keep the garment fully faithful to the source image. Use a seamless edge-to-edge background with no artificial border, no card frame, and no canvas-like padding. Fill the frame tightly while keeping the full hanger hook visible.",
+    ghost: "Create a high-end ghost mannequin style e-commerce image. Keep the garment fully faithful to the source image. If a solid background color is selected, match that exact background color with a seamless uniform backdrop.",
     model: "Create a premium fashion editorial model shot while preserving the garment design and details exactly.",
     custom: String(styleConfig?.customPrompt || "").trim() || "Create a premium fashion image while preserving the garment exactly.",
   };
@@ -1223,9 +1223,11 @@ function buildPromptFromConfig(styleConfig) {
     ? "Use a transparent or clean cutout background."
     : String(styleConfig?.background?.type || "solid") === "studio"
       ? "Use a premium fashion studio background."
-      : "Use a clean neutral studio background.";
+      : `Use the exact solid background color ${String(styleConfig?.background?.color || "#FFFFFF")}. Keep it seamless and uniform with no gradient, no gray cast, no vignette, and no visible floor line.`;
   const framingLine = String(styleConfig?.framing || "full") === "focus"
-    ? "Use product-focused framing and keep the garment as the clear main subject."
+    ? (mode === "hanger"
+      ? "Use tight product-focused framing. Keep the full garment and hanger hook visible while minimizing empty margins. No border, card, or canvas-like padding."
+      : "Use product-focused framing and keep the garment as the clear main subject.")
     : "Keep the full subject composition visible.";
   const orientationLine = String(styleConfig?.orientation || "front") === "front"
     ? "Front-facing composition."

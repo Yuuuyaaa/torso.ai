@@ -2058,7 +2058,8 @@ function buildPromptFromConfig(styleConfig) {
       "Use the hanger from the uploaded reference image.",
       "Do not replace or redesign the hanger. Preserve hanger shape, material, and hook exactly.",
       "Ensure natural hanging drape and balanced alignment.",
-      "Clean e-commerce studio background and lighting.",
+      "Use a seamless edge-to-edge e-commerce background with no artificial border, no card frame, and no canvas-like padding.",
+      "Fill the frame tightly while keeping the entire garment and hanger hook visible.",
     ].join(" "),
     ghost: [
       "Create a professional ghost mannequin effect for e-commerce.",
@@ -2068,6 +2069,7 @@ function buildPromptFromConfig(styleConfig) {
       "Ensure shoulders, sleeves, and side seams retain natural volume and symmetry.",
       "Do not collapse or flatten the garment.",
       "Preserve sharp garment edges and fine garment details.",
+      "If a solid background color is selected, match that exact background color with a seamless uniform backdrop.",
     ].join(" "),
     model: [
       "Generate a professional fashion model wearing the garment.",
@@ -2080,7 +2082,7 @@ function buildPromptFromConfig(styleConfig) {
     custom: "",
   };
   const BACKGROUND_PRESETS = {
-    solid: `Background: solid color ${styleConfig.background.color}.`,
+    solid: `Background: exact solid color ${styleConfig.background.color}. Use a seamless uniform single-color backdrop. No gradient, no gray cast, no vignette, no visible floor line, and no border or canvas padding.`,
     studio: "Background: professional studio setting.",
     outdoor: "Background: clean outdoor setting suitable for e-commerce fashion.",
   };
@@ -2323,10 +2325,11 @@ function buildPromptFromConfig(styleConfig) {
     },
     hanger: {
       focus: [
-        "Use product-focused framing for hanger outputs.",
+        "Use tight product-focused framing for hanger outputs.",
         "Keep the entire garment and hanger (including hook) fully visible.",
-        "Center the hanger and garment with balanced margins.",
-        "Do not crop any part of the hanger or garment.",
+        "Minimize empty margins around the subject.",
+        "Do not add artificial white border, card frame, or canvas-like padding.",
+        "The selected background must extend edge-to-edge.",
       ].join(" "),
     },
     model: {
@@ -2353,9 +2356,11 @@ function buildPromptFromConfig(styleConfig) {
     ].join(" ");
   }
 
-  const centerLine = (styleConfig.mode === "torso" || styleConfig.mode === "mannequin" || styleConfig.mode === "hanger")
-    ? "Center composition around the uploaded garment."
-    : "Centered subject.";
+  const centerLine = styleConfig.mode === "hanger"
+    ? "Center the hanger and garment while using tight framing with minimal empty space."
+    : (styleConfig.mode === "torso" || styleConfig.mode === "mannequin")
+      ? "Center composition around the uploaded garment."
+      : "Centered subject.";
   const noCropLine = styleConfig.mode === "torso" ? "" : "No cropping of garment.";
   return [
     ...GARMENT_INTEGRITY_BLOCK,
