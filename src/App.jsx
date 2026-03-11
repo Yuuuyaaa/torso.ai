@@ -5,6 +5,7 @@ import {
   deleteGeneratedItems,
   downloadJobZip,
   fetchAssetLibrary,
+  getBillingHistory,
   editImage,
   generateModelAssets,
   getCreditPackOffers,
@@ -20,6 +21,7 @@ import {
   retryJob,
   saveAssetLibrary,
   signup,
+  createCustomerPortalSession,
   createCheckoutSession,
   startDemoSession,
   updateUserName,
@@ -9380,6 +9382,92 @@ function SettingsPage({ user }) {
   const formatYen = useCallback((value) => `¥${Number(value || 0).toLocaleString("ja-JP")}`, []);
   const [topupBusy, setTopupBusy] = useState(false);
   const [topupError, setTopupError] = useState("");
+  const [portalBusy, setPortalBusy] = useState(false);
+  const [portalError, setPortalError] = useState("");
+  const [billingLoading, setBillingLoading] = useState(false);
+  const [billingError, setBillingError] = useState("");
+  const [billingCustomer, setBillingCustomer] = useState(null);
+  const [creditPackOrders, setCreditPackOrders] = useState([]);
+  const [subscriptionOrders, setSubscriptionOrders] = useState([]);
+
+  const formatDateTime = useCallback(
+    (value) => {
+      if (!value) return "-";
+      return new Date(value).toLocaleString("ja-JP", {
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
+    },
+    [],
+  );
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!user?.id) {
+      setBillingCustomer(null);
+      setCreditPackOrders([]);
+      setSubscriptionOrders([]);
+      return undefined;
+    }
+    setBillingLoading(true);
+    setBillingError("");
+    getBillingHistory(user.id)
+      .then((data) => {
+        if (cancelled) return;
+        setBillingCustomer(data?.billingCustomer || null);
+        setCreditPackOrders(Array.isArray(data?.creditPackOrders) ? data.creditPackOrders : []);
+        setSubscriptionOrders(Array.isArray(data?.subscriptionOrders) ? data.subscriptionOrders : []);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setBillingError(error instanceof Error ? error.message : "購入履歴の取得に失敗しました。");
+      })
+      .finally(() => {
+        if (!cancelled) setBillingLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
+  const recentBillingItems = useMemo(() => (
+    [...subscriptionOrders, ...creditPackOrders]
+      .sort((a, b) => +new Date(b.createdAt || 0) - +new Date(a.createdAt || 0))
+      .slice(0, 8)
+  ), [creditPackOrders, subscriptionOrders]);
+
+  const billingStatusMeta = useCallback((status) => {
+    const normalized = String(status || "").toLowerCase();
+    if (normalized === "paid" || normalized === "active" || normalized === "processed") {
+      return { label: "完了", color: C.green, bg: C.greenLight };
+    }
+    if (normalized === "failed") {
+      return { label: "失敗", color: C.red, bg: "#FCEDEA" };
+    }
+    if (normalized === "pending") {
+      return { label: "処理中", color: C.gold, bg: C.goldLight };
+    }
+    if (normalized === "ignored") {
+      return { label: "無視", color: C.textSub, bg: C.borderLight };
+    }
+    return { label: status || "-", color: C.textSub, bg: C.borderLight };
+  }, []);
+
+  const describeBillingItem = useCallback((item) => {
+    if (item.kind === "subscription") {
+      return {
+        title: `${getPlanLabel(item.planId)} プラン`,
+        detail: `月額 ${item.amountYen == null ? "-" : formatYen(item.amountYen)}`,
+      };
+    }
+    return {
+      title: item.packCode === "free-intro-10" ? "初回限定 10クレジット" : "追加 10クレジット",
+      detail: `${formatYen(item.amountYen)} / ${Number(item.credits || 0)}cr`,
+    };
+  }, [formatYen]);
 
   const Toggle = ({ value, onChange }) => (
     <div onClick={() => onChange(!value)} style={{
@@ -9487,6 +9575,119 @@ function SettingsPage({ user }) {
           </div>
         </div>
 
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 2, overflow: "hidden" }}>
+          <div style={{ padding: "16px 24px", borderBottom: `1px solid ${C.borderLight}`, background: C.bg }}>
+            <p style={{ fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.textSub }}>請求管理</p>
+          </div>
+          <div style={{ padding: 24 }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
+              <div>
+                <p style={{ fontSize: 14, fontWeight: 600, color: C.text, marginBottom: 6 }}>カード・請求書・サブスク管理</p>
+                <p style={{ fontSize: 12, color: C.textMid, lineHeight: 1.8 }}>
+                  Stripe の請求管理ページで、支払い方法の確認や請求履歴の参照ができます。
+                </p>
+              </div>
+              <Btn
+                size="sm"
+                variant="ghost"
+                onClick={async () => {
+                  if (!user?.id || portalBusy) return;
+                  setPortalBusy(true);
+                  setPortalError("");
+                  try {
+                    const session = await createCustomerPortalSession(user.id);
+                    window.location.assign(session.url);
+                  } catch (error) {
+                    setPortalError(error instanceof Error ? error.message : "請求管理ページを開けませんでした。");
+                  } finally {
+                    setPortalBusy(false);
+                  }
+                }}
+                disabled={portalBusy || !billingCustomer?.stripeCustomerId}
+              >
+                {portalBusy ? "移動中..." : "請求管理を開く"}
+              </Btn>
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: 12 }}>
+              <div style={{ border: `1px solid ${C.borderLight}`, padding: 16, background: C.bg }}>
+                <p style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: C.textSub, marginBottom: 8 }}>Stripe Customer</p>
+                <p style={{ fontSize: 13, color: C.text, fontWeight: 600, marginBottom: 4 }}>
+                  {billingCustomer?.stripeCustomerId || "未作成"}
+                </p>
+                <p style={{ fontSize: 12, color: C.textMid }}>{billingCustomer?.billingEmail || user?.email || "-"}</p>
+              </div>
+              <div style={{ border: `1px solid ${C.borderLight}`, padding: 16, background: C.bg }}>
+                <p style={{ fontSize: 11, letterSpacing: "0.08em", textTransform: "uppercase", color: C.textSub, marginBottom: 8 }}>購入件数</p>
+                <p style={{ fontSize: 22, color: C.text, fontWeight: 700, marginBottom: 4 }}>{creditPackOrders.length + subscriptionOrders.length}</p>
+                <p style={{ fontSize: 12, color: C.textMid }}>追加購入 {creditPackOrders.length}件 / 月額 {subscriptionOrders.length}件</p>
+              </div>
+            </div>
+            {portalError ? <p style={{ fontSize: 12, color: C.red, marginTop: 12 }}>{portalError}</p> : null}
+            {!billingCustomer?.stripeCustomerId ? (
+              <p style={{ fontSize: 12, color: C.textMid, marginTop: 12, lineHeight: 1.8 }}>
+                最初の決済が完了すると Stripe Customer が作成され、ここから請求管理ページを開けます。
+              </p>
+            ) : null}
+          </div>
+        </div>
+
+        <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 2, overflow: "hidden" }}>
+          <div style={{ padding: "16px 24px", borderBottom: `1px solid ${C.borderLight}`, background: C.bg }}>
+            <p style={{ fontSize: 10, letterSpacing: "0.12em", textTransform: "uppercase", color: C.textSub }}>購入履歴</p>
+          </div>
+          <div style={{ padding: 24 }}>
+            {billingLoading ? (
+              <p style={{ fontSize: 12, color: C.textMid }}>購入履歴を読み込み中です。</p>
+            ) : billingError ? (
+              <p style={{ fontSize: 12, color: C.red }}>{billingError}</p>
+            ) : recentBillingItems.length === 0 ? (
+              <p style={{ fontSize: 12, color: C.textMid }}>まだ購入履歴はありません。</p>
+            ) : (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                {recentBillingItems.map((item) => {
+                  const meta = billingStatusMeta(item.status);
+                  const desc = describeBillingItem(item);
+                  return (
+                    <div
+                      key={`${item.kind}-${item.id}`}
+                      style={{
+                        border: `1px solid ${C.borderLight}`,
+                        background: C.bg,
+                        padding: "14px 16px",
+                        display: "grid",
+                        gridTemplateColumns: "minmax(0, 1fr) auto",
+                        gap: 14,
+                        alignItems: "center",
+                      }}
+                    >
+                      <div>
+                        <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 6 }}>
+                          <p style={{ fontSize: 13, fontWeight: 600, color: C.text }}>{desc.title}</p>
+                          <Tag color={meta.color} bg={meta.bg}>{meta.label}</Tag>
+                        </div>
+                        <p style={{ fontSize: 12, color: C.textMid, lineHeight: 1.7 }}>{desc.detail}</p>
+                        <p style={{ fontSize: 11, color: C.textSub, marginTop: 6 }}>
+                          {formatDateTime(item.createdAt)}
+                          {item.kind === "subscription" && item.stripeLatestInvoiceId ? ` / Invoice ${item.stripeLatestInvoiceId}` : ""}
+                          {item.kind === "credit_pack" && item.stripePaymentIntentId ? ` / PI ${item.stripePaymentIntentId}` : ""}
+                        </p>
+                      </div>
+                      <div style={{ textAlign: "right" }}>
+                        <p style={{ fontSize: 18, fontWeight: 700, color: C.text, fontVariantNumeric: "tabular-nums" }}>
+                          {item.amountYen == null ? "-" : formatYen(item.amountYen)}
+                        </p>
+                        <p style={{ fontSize: 11, color: C.textSub, marginTop: 4 }}>
+                          {item.kind === "subscription" ? "月額" : `${Number(item.credits || 0)}cr`}
+                        </p>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+
         {/* Preferences */}
         <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 2, overflow: "hidden" }}>
           <div style={{ padding: "16px 24px", borderBottom: `1px solid ${C.borderLight}`, background: C.bg }}>
@@ -9537,7 +9738,26 @@ function SettingsPage({ user }) {
           </div>
           <div style={{ padding: "20px 24px", display: "flex", gap: 12 }}>
             <Btn variant="ghost" size="sm">プランを変更</Btn>
-            <Btn variant="ghost" size="sm">サブスクをキャンセル</Btn>
+            <Btn
+              variant="ghost"
+              size="sm"
+              onClick={async () => {
+                if (!user?.id || portalBusy || !billingCustomer?.stripeCustomerId) return;
+                setPortalBusy(true);
+                setPortalError("");
+                try {
+                  const session = await createCustomerPortalSession(user.id);
+                  window.location.assign(session.url);
+                } catch (error) {
+                  setPortalError(error instanceof Error ? error.message : "請求管理ページを開けませんでした。");
+                } finally {
+                  setPortalBusy(false);
+                }
+              }}
+              disabled={portalBusy || !billingCustomer?.stripeCustomerId}
+            >
+              サブスクを管理
+            </Btn>
           </div>
         </div>
 

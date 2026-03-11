@@ -880,6 +880,89 @@ export async function listCreditHistory(userId) {
     }));
 }
 
+export async function getBillingHistory(userId) {
+  if (!userId) {
+    return { creditPackOrders: [], subscriptionOrders: [], billingCustomer: null };
+  }
+  if (shouldUseBackend()) {
+    const data = await backendRequest(`/api/billing/history?userId=${encodeURIComponent(userId)}`);
+    return {
+      creditPackOrders: Array.isArray(data?.creditPackOrders) ? data.creditPackOrders : [],
+      subscriptionOrders: Array.isArray(data?.subscriptionOrders) ? data.subscriptionOrders : [],
+      billingCustomer: data?.billingCustomer || null,
+    };
+  }
+
+  const db = readDb();
+  const creditPackOrders = (Array.isArray(db.creditPackOrders) ? db.creditPackOrders : [])
+    .filter((order) => order.userId === userId)
+    .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
+    .map((order) => ({
+      id: order.id,
+      kind: "credit_pack",
+      userId: order.userId,
+      planId: order.planId || "free",
+      packCode: order.packCode || "",
+      credits: Number(order.credits || 0),
+      amountYen: Number(order.amountYen || 0),
+      status: order.status || "pending",
+      stripeCheckoutSessionId: order.stripeCheckoutSessionId || "",
+      stripePaymentIntentId: order.stripePaymentIntentId || "",
+      createdAt: order.createdAt || nowIso(),
+      updatedAt: order.updatedAt || order.createdAt || nowIso(),
+      payload: order.payload || {},
+    }));
+  const subscriptionOrders = (Array.isArray(db.subscriptionOrders) ? db.subscriptionOrders : [])
+    .filter((order) => order.userId === userId)
+    .sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt))
+    .map((order) => ({
+      id: order.id,
+      kind: "subscription",
+      userId: order.userId,
+      planId: order.planId || "free",
+      interval: order.interval || "month",
+      amountYen: order.amountYen == null ? null : Number(order.amountYen),
+      status: order.status || "pending",
+      stripeCheckoutSessionId: order.stripeCheckoutSessionId || "",
+      stripeSubscriptionId: order.stripeSubscriptionId || "",
+      stripeCustomerId: order.stripeCustomerId || "",
+      stripeLatestInvoiceId: order.stripeLatestInvoiceId || "",
+      createdAt: order.createdAt || nowIso(),
+      updatedAt: order.updatedAt || order.createdAt || nowIso(),
+      payload: order.payload || {},
+    }));
+  const customer = (Array.isArray(db.billingCustomers) ? db.billingCustomers : []).find((row) => row.userId === userId) || null;
+  return {
+    creditPackOrders,
+    subscriptionOrders,
+    billingCustomer: customer ? {
+      userId: customer.userId,
+      stripeCustomerId: customer.stripeCustomerId || "",
+      billingEmail: customer.billingEmail || "",
+      defaultPaymentMethodId: customer.defaultPaymentMethodId || "",
+      createdAt: customer.createdAt || nowIso(),
+      updatedAt: customer.updatedAt || customer.createdAt || nowIso(),
+      payload: customer.payload || {},
+    } : null,
+  };
+}
+
+export async function createCustomerPortalSession(userId) {
+  if (!userId) throw new Error("userId is required");
+  if (!shouldUseBackend()) {
+    throw new Error("請求管理ページはバックエンド接続時のみ利用できます。");
+  }
+  const data = await backendRequest("/api/billing/customer-portal", {
+    method: "POST",
+    body: JSON.stringify({
+      userId,
+      returnUrl: typeof window !== "undefined" ? `${window.location.origin}/app` : "",
+    }),
+  });
+  if (!data?.url) throw new Error("portal url missing");
+  return data;
+}
+
 export async function listActiveJobs(userId) {
   const jobs = await listJobs(userId);
   return jobs.filter((job) => job.status === "queued" || job.status === "processing");
