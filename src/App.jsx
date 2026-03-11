@@ -6791,6 +6791,7 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
   const [uploadError, setUploadError] = useState("");
   const [confirmProductDeleteOpen, setConfirmProductDeleteOpen] = useState(false);
   const [pendingDeleteAssetIds, setPendingDeleteAssetIds] = useState([]);
+  const [productDeletePopoverAnchor, setProductDeletePopoverAnchor] = useState("");
 
   const addAssets = useCallback(async (newFiles) => {
     const imageFiles = (newFiles || []).filter((file) => (
@@ -7006,15 +7007,17 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
     setSelectionMode(false);
     setSelectedAssetIds([]);
   }, []);
-  const openDeleteConfirm = useCallback((assetIds) => {
+  const openDeleteConfirm = useCallback((assetIds, anchor = "toolbar") => {
     const ids = Array.isArray(assetIds) ? assetIds.filter(Boolean) : [];
     if (ids.length === 0) return;
     setPendingDeleteAssetIds(ids);
+    setProductDeletePopoverAnchor(anchor);
     setConfirmProductDeleteOpen(true);
   }, []);
   const closeDeleteConfirm = useCallback(() => {
     setConfirmProductDeleteOpen(false);
     setPendingDeleteAssetIds([]);
+    setProductDeletePopoverAnchor("");
   }, []);
   const confirmDeleteProducts = useCallback(() => {
     if (pendingDeleteAssetIds.length === 0) return;
@@ -7141,17 +7144,53 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
                     <span style={{ fontSize: 11, color: C.textSub }}>{selectedAssetIds.length} 件選択中</span>
                     <Btn size="sm" variant="ghost" onClick={cancelSelection}>選択解除</Btn>
                     <Btn size="sm" variant="ghost" onClick={selectAllFilteredAssets} disabled={filteredAssets.length === 0}>全て選択</Btn>
-                    <Btn
-                      size="sm"
-                      variant="secondary"
-                      onClick={() => {
-                        if (selectedAssetIds.length === 0) return;
-                        openDeleteConfirm(selectedAssetIds);
-                      }}
-                      disabled={selectedAssetIds.length === 0}
-                    >
-                      選択を削除
-                    </Btn>
+                    <div style={{ position: "relative" }}>
+                      <Btn
+                        size="sm"
+                        variant="secondary"
+                        onClick={() => {
+                          if (selectedAssetIds.length === 0) return;
+                          openDeleteConfirm(selectedAssetIds, "toolbar");
+                        }}
+                        disabled={selectedAssetIds.length === 0}
+                      >
+                        選択を削除
+                      </Btn>
+                      {confirmProductDeleteOpen && productDeletePopoverAnchor === "toolbar" && (
+                        <div
+                          style={{
+                            position: "absolute",
+                            top: "calc(100% + 8px)",
+                            right: 0,
+                            width: 300,
+                            background: C.surface,
+                            border: `1px solid ${C.border}`,
+                            boxShadow: "0 10px 24px rgba(0,0,0,0.12)",
+                            padding: 12,
+                            zIndex: 25,
+                          }}
+                        >
+                          <p style={{ fontSize: 12, color: C.text, marginBottom: 6 }}>本当に削除しますか？</p>
+                          <p style={{ fontSize: 11, color: C.textSub, lineHeight: 1.6, marginBottom: 10 }}>
+                            選択した {pendingDeleteAssetIds.length} 件の商品画像を削除します。削除した画像は元に戻せません。
+                          </p>
+                          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                            <button
+                              onClick={closeDeleteConfirm}
+                              style={{ border: `1px solid ${C.border}`, background: C.bg, color: C.textSub, fontSize: 12, padding: "8px 10px", cursor: "pointer" }}
+                            >
+                              キャンセル
+                            </button>
+                            <button
+                              onClick={confirmDeleteProducts}
+                              style={{ border: `1px solid ${C.red}`, background: C.red, color: C.surface, fontSize: 12, padding: "8px 10px", cursor: "pointer" }}
+                            >
+                              削除する
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
                   </>
                 )}
               </div>
@@ -7366,16 +7405,52 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
               <div style={{ display: "flex", justifyContent: "flex-end", alignItems: "center", gap: 14 }}>
                 <p style={{ fontSize: 12, color: C.textMid }}>{viewer.index + 1}/{viewer.items.length}</p>
                 {!user?.isDemo && currentViewerItem && (
-                  <Btn
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => {
-                      if (!currentViewerItem) return;
-                      openDeleteConfirm([currentViewerItem.id]);
-                    }}
-                  >
-                    削除
-                  </Btn>
+                  <div style={{ position: "relative" }}>
+                    <Btn
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        if (!currentViewerItem) return;
+                        openDeleteConfirm([currentViewerItem.id], "viewer");
+                      }}
+                    >
+                      削除
+                    </Btn>
+                    {confirmProductDeleteOpen && productDeletePopoverAnchor === "viewer" && (
+                      <div
+                        style={{
+                          position: "absolute",
+                          top: "calc(100% + 8px)",
+                          right: 0,
+                          width: 300,
+                          background: C.surface,
+                          border: `1px solid ${C.border}`,
+                          boxShadow: "0 10px 24px rgba(0,0,0,0.12)",
+                          padding: 12,
+                          zIndex: 25,
+                        }}
+                      >
+                        <p style={{ fontSize: 12, color: C.text, marginBottom: 6 }}>この商品画像を削除しますか？</p>
+                        <p style={{ fontSize: 11, color: C.textSub, lineHeight: 1.6, marginBottom: 10 }}>
+                          削除した画像は元に戻せません。
+                        </p>
+                        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                          <button
+                            onClick={closeDeleteConfirm}
+                            style={{ border: `1px solid ${C.border}`, background: C.bg, color: C.textSub, fontSize: 12, padding: "8px 10px", cursor: "pointer" }}
+                          >
+                            キャンセル
+                          </button>
+                          <button
+                            onClick={confirmDeleteProducts}
+                            style={{ border: `1px solid ${C.red}`, background: C.red, color: C.surface, fontSize: 12, padding: "8px 10px", cursor: "pointer" }}
+                          >
+                            削除する
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 )}
                 <button onClick={closeViewer} style={{ border: "none", background: "transparent", cursor: "pointer", fontSize: 20, color: C.textMid }}>×</button>
               </div>
@@ -7475,34 +7550,6 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
           </div>
         </div>
       ), document.body)}
-      {confirmProductDeleteOpen && (
-        <div
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(17,17,17,0.32)",
-            display: "grid",
-            placeItems: "center",
-            padding: 20,
-            zIndex: 1280,
-          }}
-        >
-          <div style={{ width: "min(420px, 100%)", background: C.surface, border: `1px solid ${C.border}`, padding: 22 }}>
-            <h3 style={{ fontFamily: SERIF, fontSize: 22, fontWeight: 500, color: C.text, marginBottom: 8 }}>
-              {pendingDeleteAssetIds.length > 1 ? "商品画像を削除しますか？" : "この商品画像を削除しますか？"}
-            </h3>
-            <p style={{ fontSize: 13, color: C.textSub, lineHeight: 1.7, marginBottom: 18 }}>
-              {pendingDeleteAssetIds.length > 1
-                ? `選択した ${pendingDeleteAssetIds.length} 件を削除します。削除した画像は元に戻せません。`
-                : "削除した画像は元に戻せません。"}
-            </p>
-            <div style={{ display: "flex", justifyContent: "flex-end", gap: 10 }}>
-              <Btn size="sm" variant="ghost" onClick={closeDeleteConfirm}>キャンセル</Btn>
-              <Btn size="sm" variant="secondary" onClick={confirmDeleteProducts}>削除する</Btn>
-            </div>
-          </div>
-        </div>
-      )}
     </div>
   );
 }
