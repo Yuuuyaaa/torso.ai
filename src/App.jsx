@@ -814,6 +814,13 @@ function productAssetKey(userId, assetId) {
   return `${userId}:${assetId}`;
 }
 
+function stripProductAssetsForRemote(products = []) {
+  return (products || []).map((asset) => ({
+    ...asset,
+    dataUrl: "",
+  }));
+}
+
 function stripProductAssetsForMeta(products = []) {
   return (products || []).map((asset) => ({
     ...asset,
@@ -6805,6 +6812,7 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
   const inputRef = useRef(null);
   const viewerCanvasRef = useRef(null);
   const categoryMenuRef = useRef(null);
+  const uploadQueueRef = useRef(Promise.resolve());
   const prevViewerZoomRef = useRef(1);
   const [viewer, setViewer] = useState(null);
   const [viewerZoom, setViewerZoom] = useState(1);
@@ -6820,6 +6828,58 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
   const [pendingDeleteAssetIds, setPendingDeleteAssetIds] = useState([]);
   const [productDeletePopoverAnchor, setProductDeletePopoverAnchor] = useState("");
 
+  const enqueueAssetUpload = useCallback((assetId, fileName, optimizedUploadDataUrl) => {
+    if (!assetId) return;
+    if (!user?.id || user?.isDemo) {
+      setAssets((prev) => prev.map((asset) => (
+        asset.id === assetId
+          ? {
+            ...asset,
+            outputUrl: asset.outputUrl || optimizedUploadDataUrl,
+            uploadStatus: "done",
+            uploadError: "",
+          }
+          : asset
+      )));
+      return;
+    }
+
+    uploadQueueRef.current = uploadQueueRef.current
+      .catch(() => {})
+      .then(async () => {
+        try {
+          const uploaded = await uploadAssetImage({
+            userId: user.id,
+            name: fileName,
+            dataUrl: optimizedUploadDataUrl,
+            purpose: "products-library",
+          });
+          setAssets((prev) => prev.map((asset) => (
+            asset.id === assetId
+              ? {
+                ...asset,
+                outputUrl: uploaded.url,
+                uploadStatus: "done",
+                uploadError: "",
+              }
+              : asset
+          )));
+        } catch (error) {
+          const message = error instanceof Error ? error.message : "画像の保存に失敗しました。";
+          setAssets((prev) => prev.map((asset) => (
+            asset.id === assetId
+              ? {
+                ...asset,
+                uploadStatus: "failed",
+                uploadError: message,
+              }
+              : asset
+          )));
+          setUploadError(message);
+        }
+      });
+  }, [setAssets, user?.id, user?.isDemo]);
+
   const addAssets = useCallback(async (newFiles) => {
     const imageFiles = (newFiles || []).filter((file) => (
       (file.type || "").startsWith("image/")
@@ -6832,37 +6892,34 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
     }
     setUploadError("");
 
-    const converted = [];
+    let lastError = "";
     for (const file of imageFiles) {
       try {
         const dataUrl = await fileToRenderableDataUrl(file);
         await ensureImageWithinMegapixels(dataUrl, PRODUCT_UPLOAD_MAX_MP);
         const optimizedUploadDataUrl = await optimizeProductUploadDataUrl(dataUrl, file.name);
-        const uploaded = user?.id && !user?.isDemo
-          ? await uploadAssetImage({
-            userId: user.id,
-            name: file.name,
-            dataUrl: optimizedUploadDataUrl,
-            purpose: "products-library",
-          })
-          : { url: dataUrl };
-        converted.push({
-          id: `prd_${Math.random().toString(36).slice(2, 10)}`,
+        const assetId = `prd_${Math.random().toString(36).slice(2, 10)}`;
+        const placeholder = {
+          id: assetId,
           name: file.name,
           dataUrl: optimizedUploadDataUrl,
-          outputUrl: uploaded.url,
+          outputUrl: user?.id && !user?.isDemo ? "" : optimizedUploadDataUrl,
           category: "unassigned",
           builtIn: false,
           createdAt: new Date().toISOString(),
-        });
+          uploadStatus: user?.id && !user?.isDemo ? "uploading" : "done",
+          uploadError: "",
+        };
+        setAssets((prev) => [placeholder, ...prev]);
+        enqueueAssetUpload(assetId, file.name, optimizedUploadDataUrl);
       } catch (e) {
-        setUploadError(e instanceof Error ? e.message : "画像の追加に失敗しました。");
-        return;
+        lastError = e instanceof Error ? e.message : "画像の追加に失敗しました。";
       }
     }
-
-    setAssets((prev) => [...converted, ...prev]);
-  }, [setAssets, user?.id, user?.isDemo]);
+    if (lastError) {
+      setUploadError(lastError);
+    }
+  }, [enqueueAssetUpload, setAssets, user?.id, user?.isDemo]);
 
   const removeAsset = useCallback((assetId) => {
     setAssets((prev) => prev.filter((asset) => asset.id !== assetId));
@@ -7238,6 +7295,38 @@ function ProductsLibraryPage({ user, assets, setAssets }) {
                 style={{ aspectRatio: "3/4", background: C.bg, border: "none", padding: 0, width: "100%", display: "block", cursor: "pointer", position: "relative" }}
               >
                 <img src={getAssetThumbnailUrl(asset)} alt={asset.name} loading="lazy" decoding="async" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
+                {asset.uploadStatus === "uploading" && (
+                  <span
+                    style={{
+                      position: "absolute",
+                      right: 8,
+                      bottom: 8,
+                      background: "rgba(42,32,18,0.82)",
+                      color: "#fff",
+                      fontSize: 10,
+                      padding: "4px 6px",
+                      letterSpacing: "0.04em",
+                    }}
+                  >
+                    保存中
+                  </span>
+                )}
+                {asset.uploadStatus === "failed" && (
+                  <span
+                    style={{
+                      position: "absolute",
+                      right: 8,
+                      bottom: 8,
+                      background: "rgba(179,54,54,0.92)",
+                      color: "#fff",
+                      fontSize: 10,
+                      padding: "4px 6px",
+                      letterSpacing: "0.04em",
+                    }}
+                  >
+                    保存失敗
+                  </span>
+                )}
                 {selectionMode && (
                   <span
                     style={{
@@ -10418,7 +10507,7 @@ export default function App() {
     const snapshot = {
       studio: studioAssets,
       models: modelAssets,
-      products: productAssets,
+      products: stripProductAssetsForRemote(productAssets),
     };
     const seq = ++assetSaveSeqRef.current;
     assetSaveChainRef.current = assetSaveChainRef.current
