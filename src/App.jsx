@@ -10329,7 +10329,7 @@ export default function App() {
     });
   };
 
-  const persistProductAssetsSnapshot = useCallback(async (nextAssets) => {
+  const persistProductAssetsSnapshot = useCallback((nextAssets) => {
     if (!user?.id || user?.isDemo) return;
     const mergedProducts = mergeProductAssets(Array.isArray(nextAssets) ? nextAssets : []);
     writeAssetLibrary(user.id, {
@@ -10344,7 +10344,6 @@ export default function App() {
       modelAssets,
       productAssets: mergedProducts,
     });
-    await persistProductAssetsToDb(user.id, mergedProducts);
   }, [creditHistory, jobs, modelAssets, studioAssets, user?.id, user?.isDemo]);
 
   const updateProductAssets = useCallback((updater) => {
